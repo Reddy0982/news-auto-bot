@@ -1,141 +1,21 @@
 import re
 
-
 POST_LIMIT = 270
 
 
-# =========================================================
-# BASIC CLEANING
-# =========================================================
-
 def clean(text):
-    return re.sub(
-        r"\s+",
-        " ",
-        text or ""
-    ).strip()
-
-
-def remove_rss_junk(text):
-    text = clean(text)
-
-    if not text:
-        return ""
-
-    junk_patterns = [
-        r"\bContinue reading\.\.\.",
-        r"\bContinue reading\b",
-        r"\bGet our breaking news email\b[^.]*\.?",
-        r"\bfree app or daily news podcast\b",
-        r"\bGet the Guardian's\b[^.]*\.?",
-        r"\bSign up to our newsletter\b[^.]*\.?",
-        r"\bSubscribe to our newsletter\b[^.]*\.?",
-        r"\bRead more:\b",
-        r"\bRead more\b",
-        r"\bFollow us on\b[^.]*\.?",
-        r"\bDownload our app\b[^.]*\.?",
-        r"\bListen to our podcast\b[^.]*\.?",
-    ]
-
-    for pattern in junk_patterns:
-        text = re.sub(
-            pattern,
-            " ",
-            text,
-            flags=re.IGNORECASE
-        )
-
-    return clean(text)
-
-
-# =========================================================
-# RSS SENTENCE NORMALIZATION
-# =========================================================
-
-def normalize_rss_boundaries(text):
-    """
-    Some RSS feeds concatenate complete sentences without
-    punctuation.
-
-    Example:
-
-        "... taken over When Sir Demis Hassabis said..."
-
-    We safely restore boundaries before a small set of
-    common sentence-opening words.
-
-    This does NOT invent information.
-    It only restores punctuation between existing text.
-    """
-
-    text = clean(text)
-
-    if not text:
-        return ""
-
-    boundary_words = [
-        "When",
-        "This",
-        "That",
-        "The",
-        "He",
-        "She",
-        "It",
-        "They",
-        "Officials",
-        "Authorities",
-        "According",
-        "Meanwhile",
-        "However",
-        "But",
-        "And",
-        "As",
-        "After",
-        "Before",
-        "During",
-        "With",
-        "In",
-        "On",
-    ]
-
-    words = "|".join(
-        re.escape(word)
-        for word in boundary_words
-    )
-
-    # Only insert a boundary when the preceding
-    # character is a lowercase letter, digit, quote,
-    # or closing punctuation.
-    #
-    # We deliberately do NOT split every lowercase ->
-    # uppercase transition because that would break names
-    # such as "Google DeepMind".
-    pattern = (
-        r'(?<=[a-z0-9"”’])'
-        r'\s+'
-        r'(?=('
-        + words +
-        r')\b)'
-    )
-
-    text = re.sub(
-        pattern,
-        ". ",
-        text
-    )
-
-    return clean(text)
+    """Normalize whitespace without destroying useful content."""
+    return re.sub(r"\s+", " ", text or "").strip()
 
 
 def clean_sentence(text):
+    """Clean text and ensure it ends as a complete sentence."""
     text = clean(text)
 
     if not text:
         return ""
 
-    if text.endswith(
-        (".", "!", "?")
-    ):
+    if text.endswith((".", "!", "?")):
         return text
 
     return text + "."
@@ -143,21 +23,12 @@ def clean_sentence(text):
 
 def split_sentences(text):
     """
-    Convert source summary text into complete sentences.
+    Split normal prose into complete sentences.
 
-    Handles both:
-      1. normally punctuated RSS
-      2. RSS summaries where sentence boundaries are
-         accidentally concatenated.
+    If the source summary has poor punctuation, this function
+    still returns usable text rather than failing.
     """
-
-    text = remove_rss_junk(
-        text
-    )
-
-    text = normalize_rss_boundaries(
-        text
-    )
+    text = clean(text)
 
     if not text:
         return []
@@ -167,88 +38,27 @@ def split_sentences(text):
         text
     )
 
-    result = []
-
-    for part in parts:
-
-        sentence = clean_sentence(
-            part
-        )
-
-        if not sentence:
-            continue
-
-        # Do not accept RSS junk as context.
-        if sentence.lower().startswith(
-            "continue reading"
-        ):
-            continue
-
-        result.append(
-            sentence
-        )
-
-    return result
-
-
-def usable_sentences(text):
-    sentences = split_sentences(
-        text
-    )
-
     return [
-        sentence
-        for sentence in sentences
-        if (
-            sentence
-            and len(sentence) <= POST_LIMIT
-        )
+        clean_sentence(part)
+        for part in parts
+        if clean(part)
     ]
 
 
-# =========================================================
-# LABEL
-# =========================================================
+def label(item, breaking_min_score=75):
+    score = item.get("score", 0)
+    confidence = item.get("confidence", "low")
+    category = item.get("category", "")
+    primary = item.get("primary_source", False)
+    corroboration = item.get("strong_corroboration", 0)
+    status = item.get("event_status", "NEW")
 
-def label(
-    item,
-    breaking_min_score=75
-):
-    score = item.get(
-        "score",
-        0
-    )
-
-    confidence = item.get(
-        "confidence",
-        "low"
-    )
-
-    category = item.get(
-        "category",
-        ""
-    )
-
-    primary = item.get(
-        "primary_source",
-        False
-    )
-
-    corroboration = item.get(
-        "strong_corroboration",
-        0
-    )
-
-    status = item.get(
-        "event_status",
-        "NEW"
-    )
-
+    # Never call low-confidence information breaking.
     if confidence == "low":
         return "⚠️ UNCONFIRMED"
 
+    # Existing event with meaningful new information.
     if status == "UPDATE":
-
         if score >= 80:
             return "🔴 UPDATE"
 
@@ -264,11 +74,7 @@ def label(
         "world",
     }
 
-    urgent = bool(
-        item.get(
-            "urgency_terms"
-        )
-    )
+    urgent = bool(item.get("urgency_terms"))
 
     verified = (
         primary
@@ -290,111 +96,163 @@ def label(
     return "📰 DEVELOPING"
 
 
-# =========================================================
-# CONTEXT
-# =========================================================
+def make_headline_sentence(label_text, title):
+    title = clean(title)
 
-def choose_context_sentences(
-    summary,
-    max_sentences=2
-):
-    sentences = usable_sentences(
-        summary
+    if not title:
+        return ""
+
+    return clean_sentence(
+        f"{label_text}: {title}"
     )
 
-    return sentences[
-        :max_sentences
-    ]
-
-
-# =========================================================
-# SOURCE
-# =========================================================
 
 def make_source_sentence(source):
     source = clean(
         source or "Unknown"
     )
 
-    if source.endswith(
-        (".", "!", "?")
-    ):
-        return f"Source: {source}"
-
-    return f"Source: {source}."
-
-
-# =========================================================
-# HEADLINE
-# =========================================================
-
-def make_headline_sentence(
-    label_text,
-    title
-):
-    title = clean(
-        title
+    return clean_sentence(
+        f"Source: {source}"
     )
 
-    if not title:
-        return ""
 
-    if title.endswith(
-        (".", "!", "?")
-    ):
-        return (
-            f"{label_text}: {title}"
+def extract_context_sentences(summary, max_sentences=2):
+    """
+    Extract useful context without inventing facts.
+
+    Normal RSS summaries are split into sentences.
+
+    Some feeds provide badly formatted summaries with no sentence
+    punctuation. For those, we use safe clause boundaries instead
+    of returning an empty post.
+    """
+    summary = clean(summary)
+
+    if not summary:
+        return []
+
+    # First try normal sentence splitting.
+    sentences = split_sentences(summary)
+
+    if len(sentences) >= max_sentences:
+        return sentences[:max_sentences]
+
+    # ---------------------------------------------------------
+    # Handle badly punctuated RSS summaries.
+    #
+    # Common patterns:
+    #   "... subversive: to encourage users ..."
+    #   "... birding On a brilliantly bright afternoon ..."
+    #
+    # We split at safe textual boundaries.
+    # ---------------------------------------------------------
+
+    clauses = []
+
+    # Split on colon when the text before/after it is useful.
+    colon_parts = re.split(
+        r":\s+",
+        summary,
+        maxsplit=1
+    )
+
+    if len(colon_parts) == 2:
+        first = clean_sentence(
+            colon_parts[0]
+        )
+        second = clean_sentence(
+            colon_parts[1]
         )
 
-    return (
-        f"{label_text}: {title}."
-    )
+        if first:
+            clauses.append(first)
+
+        if second:
+            clauses.append(second)
+
+    # If we still don't have enough context, look for a clear
+    # transition such as " On a..." / " With..." / " The..."
+    if len(clauses) < max_sentences:
+        transition_parts = re.split(
+            r"\s+(?=(?:On|With|The|In|As|After|Before)\s+[A-Z])",
+            summary
+        )
+
+        for part in transition_parts:
+            part = clean_sentence(part)
+
+            if part and part not in clauses:
+                clauses.append(part)
+
+    # Final fallback: use the complete summary as one context
+    # sentence if it can fit.
+    if not clauses:
+        clauses = [
+            clean_sentence(summary)
+        ]
+
+    return clauses[:max_sentences]
 
 
-# =========================================================
-# SINGLE POST
-# =========================================================
+def shorten_to_words(text, limit):
+    """
+    Shorten text at a word boundary.
+
+    Never cuts a word in half.
+    """
+    text = clean(text)
+
+    if len(text) <= limit:
+        return text
+
+    words = text.split()
+    result = []
+
+    for word in words:
+        candidate = (
+            word
+            if not result
+            else " ".join(result + [word])
+        )
+
+        if len(candidate) > limit:
+            break
+
+        result.append(word)
+
+    if not result:
+        return ""
+
+    return " ".join(result).rstrip(" ,;:-")
+
 
 def build_single_post(
     item,
     breaking_min_score=75
 ):
     """
-    Preferred:
+    Build a safe single X post.
 
-        Headline.
-        Context.
-        Context.
-        Source.
+    Target:
+        headline
+        + useful context
+        + optional second context
+        + source
 
-    Minimum:
+    Maximum:
+        POST_LIMIT characters.
 
-        Headline.
-        Context.
-        Source.
-
-    If sufficient context does not exist, return an empty
-    post so the quality gate safely holds the story.
+    The function MUST return a non-empty post whenever
+    a title exists.
     """
 
-    lab = label(
-        item,
-        breaking_min_score
-    )
-
     title = clean(
-        item.get(
-            "title",
-            ""
-        )
+        item.get("title", "")
     )
 
-    summary = remove_rss_junk(
-        item.get(
-            "summary",
-            ""
-        )
-    )
+    if not title:
+        return ""
 
     source = clean(
         item.get(
@@ -403,8 +261,10 @@ def build_single_post(
         )
     )
 
-    if not title:
-        return ""
+    lab = label(
+        item,
+        breaking_min_score
+    )
 
     headline = make_headline_sentence(
         lab,
@@ -415,56 +275,150 @@ def build_single_post(
         source
     )
 
-    context = choose_context_sentences(
+    summary = clean(
+        item.get(
+            "summary",
+            ""
+        )
+    )
+
+    context = extract_context_sentences(
         summary,
         2
     )
 
-    # -----------------------------------------------------
-    # 4 SENTENCES
-    # -----------------------------------------------------
+    # ---------------------------------------------------------
+    # Candidate 1:
+    #
+    # Headline + 2 context sentences + source
+    # ---------------------------------------------------------
 
     if len(context) >= 2:
 
-        candidate = " ".join([
+        post = " ".join([
             headline,
             context[0],
             context[1],
             source_sentence,
         ])
 
-        if len(candidate) <= POST_LIMIT:
-            return candidate
+        if len(post) <= POST_LIMIT:
+            return post
 
-    # -----------------------------------------------------
-    # 3 SENTENCES
-    # -----------------------------------------------------
+    # ---------------------------------------------------------
+    # Candidate 2:
+    #
+    # Headline + 1 context sentence + source
+    # ---------------------------------------------------------
 
     if len(context) >= 1:
 
-        candidate = " ".join([
-            headline,
-            context[0],
+        context_text = context[0]
+
+        available = (
+            POST_LIMIT
+            - len(headline)
+            - len(source_sentence)
+            - 2
+        )
+
+        if available > 30:
+
+            shortened = shorten_to_words(
+                context_text,
+                available
+            )
+
+            if shortened:
+
+                shortened = clean_sentence(
+                    shortened
+                )
+
+                post = " ".join([
+                    headline,
+                    shortened,
+                    source_sentence,
+                ])
+
+                if len(post) <= POST_LIMIT:
+                    return post
+
+    # ---------------------------------------------------------
+    # Candidate 3:
+    #
+    # Headline + source.
+    #
+    # This guarantees that a valid title never produces
+    # an empty post.
+    # ---------------------------------------------------------
+
+    post = " ".join([
+        headline,
+        source_sentence,
+    ])
+
+    if len(post) <= POST_LIMIT:
+        return post
+
+    # ---------------------------------------------------------
+    # Candidate 4:
+    #
+    # Extremely long headline.
+    #
+    # Keep the source and shorten the headline at a
+    # word boundary.
+    # ---------------------------------------------------------
+
+    available = (
+        POST_LIMIT
+        - len(source_sentence)
+        - 1
+    )
+
+    shortened_headline = shorten_to_words(
+        headline,
+        available
+    )
+
+    if shortened_headline:
+
+        shortened_headline = clean_sentence(
+            shortened_headline
+        )
+
+        post = " ".join([
+            shortened_headline,
             source_sentence,
         ])
 
-        if len(candidate) <= POST_LIMIT:
-            return candidate
+        if len(post) <= POST_LIMIT:
+            return post
 
-    # -----------------------------------------------------
-    # SAFETY
+    # ---------------------------------------------------------
+    # Final emergency fallback.
     #
-    # Never publish headline + source only.
-    # -----------------------------------------------------
+    # A source/title story must never become an empty post.
+    # ---------------------------------------------------------
 
-    return ""
+    return shorten_to_words(
+        headline,
+        POST_LIMIT
+    )
 
-
-# =========================================================
-# FORMAT DECISION
-# =========================================================
 
 def choose_format(item):
+    """
+    Use a thread only when there is enough information
+    to justify one.
+    """
+
+    summary_length = len(
+        item.get(
+            "summary",
+            ""
+        )
+    )
 
     score = item.get(
         "score",
@@ -481,56 +435,42 @@ def choose_format(item):
         "NEW"
     )
 
-    summary = remove_rss_junk(
-        item.get(
-            "summary",
-            ""
-        )
-    )
-
     if (
         status == "UPDATE"
         and score >= 85
-        and len(summary) > 500
+        and summary_length > 500
     ):
         return "thread"
 
     if (
         score >= 92
         and corroboration >= 2
-        and len(summary) > 500
+        and summary_length > 500
     ):
         return "thread"
 
     return "single"
 
 
-# =========================================================
-# THREAD
-# =========================================================
-
 def build_thread(
     item,
     breaking_min_score=75
 ):
-    lab = label(
-        item,
-        breaking_min_score
-    )
+    """
+    Build a small thread.
+
+    Every post:
+        - is non-empty
+        - stays within POST_LIMIT
+        - contains complete words
+    """
 
     title = clean(
-        item.get(
-            "title",
-            ""
-        )
+        item.get("title", "")
     )
 
-    summary = remove_rss_junk(
-        item.get(
-            "summary",
-            ""
-        )
-    )
+    if not title:
+        return []
 
     source = clean(
         item.get(
@@ -539,38 +479,41 @@ def build_thread(
         )
     )
 
-    if not title:
-        return []
-
-    context = choose_context_sentences(
-        summary,
-        5
+    lab = label(
+        item,
+        breaking_min_score
     )
-
-    if not context:
-        return []
 
     first = make_headline_sentence(
         lab,
         title
     )
 
-    if not first:
-        return []
+    context = extract_context_sentences(
+        item.get("summary", ""),
+        5
+    )
 
-    if len(first) > POST_LIMIT:
-        return []
-
-    posts = [
-        first
-    ]
-
+    posts = [first]
     current = ""
 
     for sentence in context:
 
-        if len(sentence) > POST_LIMIT:
+        sentence = clean_sentence(
+            sentence
+        )
+
+        if not sentence:
             continue
+
+        if len(sentence) > POST_LIMIT:
+            sentence = shorten_to_words(
+                sentence,
+                POST_LIMIT
+            )
+            sentence = clean_sentence(
+                sentence
+            )
 
         candidate = (
             sentence
@@ -579,11 +522,8 @@ def build_thread(
         )
 
         if len(candidate) <= POST_LIMIT:
-
             current = candidate
-
         else:
-
             if current:
                 posts.append(
                     current
@@ -596,62 +536,78 @@ def build_thread(
             current
         )
 
-    source_sentence = make_source_sentence(
+    # ---------------------------------------------------------
+    # Add source to final post.
+    # ---------------------------------------------------------
+
+    source_line = make_source_sentence(
         source
     )
 
-    if (
-        len(posts[-1])
-        + len(source_sentence)
-        + 1
-        <= POST_LIMIT
-    ):
-        posts[-1] = (
+    if posts:
+
+        candidate = (
             f"{posts[-1]} "
-            f"{source_sentence}"
+            f"{source_line}"
         )
 
-    elif len(source_sentence) <= POST_LIMIT:
-        posts.append(
-            source_sentence
-        )
+        if len(candidate) <= POST_LIMIT:
+            posts[-1] = candidate
+        else:
+            posts.append(
+                source_line
+            )
 
-    else:
-        return []
-
-    # Final safety check.
+    # Remove empty posts.
     posts = [
         clean(post)
         for post in posts
-        if (
-            clean(post)
-            and len(clean(post)) <= POST_LIMIT
-        )
+        if clean(post)
     ]
 
-    if len(posts) < 2:
-        return []
+    # Absolute fallback.
+    if not posts:
+        posts = [
+            shorten_to_words(
+                first,
+                POST_LIMIT
+            )
+        ]
 
-    return posts[:7]
+    return posts
 
-
-# =========================================================
-# MAIN ENTRY POINT
-# =========================================================
 
 def format_story(
     item,
     breaking_min_score=75
 ):
+    """
+    Main formatter entry point.
+    """
+
     chosen_format = choose_format(
         item
     )
 
     if chosen_format == "thread":
 
+        thread = build_thread(
+            item,
+            breaking_min_score
+        )
+
+        # Never create an empty thread.
+        if thread:
+            return {
+                "format": "thread",
+                "thread": thread,
+            }
+
+        # Fall back to single post if thread
+        # construction fails.
         return {
-            "format": "thread",
-            "thread": build_thread(
+            "format": "single",
+            "post": build_single_post(
                 item,
                 breaking_min_score
             ),
