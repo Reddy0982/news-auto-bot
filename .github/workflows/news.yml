@@ -58,6 +58,17 @@ jobs:
       - name: X dry run
         run: python -m src.dry_run
 
+      # ---------------------------------------------------
+      # SHOW CURRENTLY HELD STORIES
+      #
+      # This is diagnostic only.
+      # It does NOT publish anything.
+      # ---------------------------------------------------
+
+      - name: Show held stories
+        run: |
+          python -c "import json; d=json.load(open('data/queue.json')); print(json.dumps(d.get('held', []), indent=2, ensure_ascii=False))"
+
       - name: Generate review dashboard
         run: python -m src.run_dashboard
 
