@@ -1,4 +1,4 @@
-from src.quality import quality_check
+from src.quality import quality_check, sentence_count
 from src.formatter import format_story
 
 
@@ -29,20 +29,16 @@ r = quality_check(item)
 
 assert r["quality_pass"], r
 
+
 if item["format"] == "single":
     assert len(item["post"]) <= 270
     assert item["post"].strip()
     assert "Source:" in item["post"]
 
-    sentence_total = len(
-        [
-            part
-            for part in item["post"].split(". ")
-            if part.strip()
-        ]
-    )
+    sentence_total = sentence_count(item["post"])
 
-    assert 3 <= sentence_total <= 4
+    assert 3 <= sentence_total <= 4, item["post"]
+
 
 else:
     assert item["thread"]
@@ -50,5 +46,6 @@ else:
     for post in item["thread"]:
         assert post.strip()
         assert len(post) <= 270
+
 
 print("QUALITY TEST PASSED")
