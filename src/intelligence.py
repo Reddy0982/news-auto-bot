@@ -20,9 +20,18 @@ CATEGORY_TERMS = {
     },
 
     "politics": {
-        "president", "prime minister", "government", "election",
-        "parliament", "senate", "minister", "vote", "coalition",
-        "sanctions", "diplomatic"
+        "president", "presidential", "prime minister",
+        "government", "administration", "election",
+        "parliament", "senate", "congress",
+        "minister", "vote", "coalition",
+        "sanctions", "diplomatic", "diplomacy",
+        "political", "politics",
+        "court", "courts", "appeals court",
+        "federal court", "supreme court",
+        "judge", "judges", "ruling",
+        "legislation", "law", "bill",
+        "white house", "presidency",
+        "president trump", "appeal", "appeals"
     },
 
     "disaster": {
