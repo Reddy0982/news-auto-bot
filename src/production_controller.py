@@ -1,7 +1,7 @@
 import json
 import os
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,7 +11,18 @@ QUEUE = ROOT / "data" / "queue.json"
 STATE = ROOT / "data" / "production_state.json"
 
 
+# =========================================================
+# FILE HELPERS
+# =========================================================
+
 def load(path, default):
+    """
+    Safely load JSON.
+
+    If the file does not exist or contains invalid JSON,
+    return the supplied default.
+    """
+
     if not path.exists():
         return default
 
@@ -19,11 +30,16 @@ def load(path, default):
         return json.loads(
             path.read_text()
         )
+
     except Exception:
         return default
 
 
 def save(path, data):
+    """
+    Safely save JSON.
+    """
+
     path.parent.mkdir(
         parents=True,
         exist_ok=True
@@ -38,11 +54,61 @@ def save(path, data):
     )
 
 
+# =========================================================
+# DATETIME HELPERS
+# =========================================================
+
+def parse_timestamp(value):
+    """
+    Convert an ISO timestamp into an aware UTC datetime.
+
+    Invalid timestamps return None.
+    """
+
+    if not value:
+        return None
+
+    try:
+        timestamp = datetime.fromisoformat(
+            value.replace(
+                "Z",
+                "+00:00"
+            )
+        )
+
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(
+                tzinfo=timezone.utc
+            )
+
+        return timestamp.astimezone(
+            timezone.utc
+        )
+
+    except Exception:
+        return None
+
+
+# =========================================================
+# CONTROLLER
+# =========================================================
+
 def controller():
+
+    # -----------------------------------------------------
+    # LOAD HEALTH
+    # -----------------------------------------------------
+
     health = load(
         HEALTH,
-        {"status": "RED"}
+        {
+            "status": "RED"
+        }
     )
+
+    # -----------------------------------------------------
+    # LOAD QUEUE
+    # -----------------------------------------------------
 
     queue = load(
         QUEUE,
@@ -51,6 +117,10 @@ def controller():
             "count": 0
         }
     )
+
+    # -----------------------------------------------------
+    # LOAD PRODUCTION STATE
+    # -----------------------------------------------------
 
     state = load(
         STATE,
@@ -69,9 +139,16 @@ def controller():
 
     today = now.date().isoformat()
 
-    # ---------------------------------------------------------
-    # SAFETY LIMITS
-    # ---------------------------------------------------------
+    # =====================================================
+    # CONFIGURATION
+    # =====================================================
+
+    # Maximum number of individual X posts per UTC day.
+    #
+    # IMPORTANT:
+    # A thread containing 3 X posts consumes 3 posts,
+    # not 1.
+    # =====================================================
 
     daily_limit = int(
         os.getenv(
@@ -80,6 +157,13 @@ def controller():
         )
     )
 
+    # Maximum number of individual X posts during
+    # any rolling 30-minute window.
+    #
+    # Default:
+    # 3 posts / 30 minutes.
+    # =====================================================
+
     half_hour_limit = int(
         os.getenv(
             "X_HALF_HOUR_POST_LIMIT",
@@ -87,26 +171,49 @@ def controller():
         )
     )
 
-    # ---------------------------------------------------------
+    # =====================================================
     # DAILY RESET
-    # ---------------------------------------------------------
+    # =====================================================
 
     if (
-        state.get("last_reset_date")
+        state.get(
+            "last_reset_date"
+        )
         != today
     ):
+
         state["daily_post_count"] = 0
+
         state["last_reset_date"] = today
 
-        # Old timestamps are no longer
-        # useful after a new UTC day.
+        # Previous day's timestamps are irrelevant.
         state["recent_post_times"] = []
 
-    # ---------------------------------------------------------
-    # CLEAN OLD POST TIMESTAMPS
+    # =====================================================
+    # NORMALIZE DAILY COUNT
+    # =====================================================
+
+    try:
+        state["daily_post_count"] = max(
+            0,
+            int(
+                state.get(
+                    "daily_post_count",
+                    0
+                )
+            )
+        )
+
+    except Exception:
+
+        state["daily_post_count"] = 0
+
+    # =====================================================
+    # CLEAN POST TIMESTAMPS
     #
-    # Keep only posts from the last 30 minutes.
-    # ---------------------------------------------------------
+    # Keep only timestamps from the previous
+    # 30 minutes.
+    # =====================================================
 
     recent_post_times = []
 
@@ -115,35 +222,87 @@ def controller():
         []
     ):
 
-        try:
-            timestamp = datetime.fromisoformat(
-                value.replace(
-                    "Z",
-                    "+00:00"
-                )
-            )
+        timestamp = parse_timestamp(
+            value
+        )
 
-            age = (
-                now - timestamp
-            ).total_seconds()
-
-            if (
-                0 <= age < 1800
-            ):
-                recent_post_times.append(
-                    timestamp.isoformat()
-                )
-
-        except Exception:
+        if timestamp is None:
             continue
+
+        age_seconds = (
+            now - timestamp
+        ).total_seconds()
+
+        # Ignore future timestamps.
+        if age_seconds < 0:
+            continue
+
+        # Keep posts from the rolling
+        # 30-minute window.
+        if age_seconds < 1800:
+
+            recent_post_times.append(
+                timestamp.isoformat()
+            )
 
     state["recent_post_times"] = (
         recent_post_times
     )
 
-    # ---------------------------------------------------------
+    # =====================================================
+    # CURRENT COUNTERS
+    # =====================================================
+
+    daily_post_count = state.get(
+        "daily_post_count",
+        0
+    )
+
+    half_hour_post_count = len(
+        state.get(
+            "recent_post_times",
+            []
+        )
+    )
+
+    ready_count = int(
+        queue.get(
+            "count",
+            len(
+                queue.get(
+                    "stories",
+                    []
+                )
+            )
+        )
+        or 0
+    )
+
+    # =====================================================
+    # REMAINING CAPACITY
+    # =====================================================
+
+    daily_remaining = max(
+        0,
+        daily_limit - daily_post_count
+    )
+
+    half_hour_remaining = max(
+        0,
+        half_hour_limit - half_hour_post_count
+    )
+
+    # The publisher must never publish more than
+    # the smallest available capacity.
+    publish_capacity = min(
+        daily_remaining,
+        half_hour_remaining,
+        ready_count
+    )
+
+    # =====================================================
     # ENVIRONMENT CONTROLS
-    # ---------------------------------------------------------
+    # =====================================================
 
     live_requested = (
         os.getenv(
@@ -161,116 +320,186 @@ def controller():
         == "true"
     )
 
+    # =====================================================
+    # SAFETY REASONS
+    # =====================================================
+
     reasons = []
 
-    # ---------------------------------------------------------
-    # SAFETY CHECKS
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # Live publishing must be explicitly enabled.
+    # -----------------------------------------------------
 
     if not live_requested:
+
         reasons.append(
             "live publishing is disabled"
         )
 
+    # -----------------------------------------------------
+    # Kill switch always blocks publishing.
+    # -----------------------------------------------------
+
     if kill_switch:
+
         reasons.append(
             "kill switch is active"
         )
 
-    if health.get("status") == "RED":
+    # -----------------------------------------------------
+    # RED health blocks publishing.
+    #
+    # YELLOW is allowed.
+    # -----------------------------------------------------
+
+    if health.get(
+        "status"
+    ) == "RED":
+
         reasons.append(
             "health gate is RED"
         )
 
+    # -----------------------------------------------------
+    # Invalid daily limit.
+    # -----------------------------------------------------
+
     if daily_limit <= 0:
+
         reasons.append(
             "daily post limit is zero"
         )
 
+    # -----------------------------------------------------
+    # Daily limit reached.
+    # -----------------------------------------------------
+
     if (
-        state.get(
-            "daily_post_count",
-            0
-        )
+        daily_post_count
         >= daily_limit
     ):
+
         reasons.append(
             "daily post limit reached"
         )
 
-    half_hour_count = len(
-        state.get(
-            "recent_post_times",
-            []
-        )
-    )
+    # -----------------------------------------------------
+    # Invalid 30-minute limit.
+    # -----------------------------------------------------
 
     if half_hour_limit <= 0:
+
         reasons.append(
             "30-minute post limit is zero"
         )
 
+    # -----------------------------------------------------
+    # 30-minute limit reached.
+    # -----------------------------------------------------
+
     if (
-        half_hour_count
+        half_hour_post_count
         >= half_hour_limit
     ):
+
         reasons.append(
             "30-minute post limit reached"
         )
 
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
+    # No stories available.
+    # -----------------------------------------------------
+
+    if ready_count <= 0:
+
+        reasons.append(
+            "no stories are ready"
+        )
+
+    # =====================================================
     # FINAL DECISION
-    # ---------------------------------------------------------
+    # =====================================================
 
     allowed = not reasons
+
+    # Even if allowed is true, the publisher must
+    # respect the calculated capacity.
+    if allowed and publish_capacity <= 0:
+
+        allowed = False
+
+        reasons.append(
+            "no publishing capacity available"
+        )
+
+    # =====================================================
+    # RESULT
+    # =====================================================
 
     result = {
         "checked_at": now.isoformat(),
 
-        "live_requested":
-            live_requested,
+        "live_requested": (
+            live_requested
+        ),
 
-        "kill_switch":
-            kill_switch,
+        "kill_switch": (
+            kill_switch
+        ),
 
-        "health":
+        "health": (
             health.get(
                 "status"
-            ),
+            )
+        ),
 
-        "daily_limit":
-            daily_limit,
+        "daily_limit": (
+            daily_limit
+        ),
 
-        "daily_post_count":
-            state.get(
-                "daily_post_count",
-                0
-            ),
+        "daily_post_count": (
+            daily_post_count
+        ),
 
-        "half_hour_limit":
-            half_hour_limit,
+        "daily_remaining": (
+            daily_remaining
+        ),
 
-        "half_hour_post_count":
-            half_hour_count,
+        "half_hour_limit": (
+            half_hour_limit
+        ),
 
-        "ready_count":
-            queue.get(
-                "count",
-                0
-            ),
+        "half_hour_post_count": (
+            half_hour_post_count
+        ),
 
-        "allowed":
-            allowed,
+        "half_hour_remaining": (
+            half_hour_remaining
+        ),
 
-        "reasons":
-            reasons,
+        "publish_capacity": (
+            publish_capacity
+        ),
+
+        "ready_count": (
+            ready_count
+        ),
+
+        "allowed": (
+            allowed
+        ),
+
+        "reasons": (
+            reasons
+        )
     }
 
-    # ---------------------------------------------------------
+    # =====================================================
     # STORE CONTROLLER STATE
-    # ---------------------------------------------------------
+    # =====================================================
 
     state["live_enabled"] = allowed
+
     state["kill_switch"] = kill_switch
 
     save(
@@ -278,15 +507,24 @@ def controller():
         state
     )
 
+    # =====================================================
+    # DISPLAY
+    # =====================================================
+
     print(
         json.dumps(
             result,
-            indent=2
+            indent=2,
+            ensure_ascii=False
         )
     )
 
     return result
 
+
+# =========================================================
+# ENTRY POINT
+# =========================================================
 
 if __name__ == "__main__":
     controller()
