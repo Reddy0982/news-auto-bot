@@ -76,31 +76,30 @@ def _words(text):
 def _category(text, source_category):
     raw = (source_category or "").lower().strip()
 
-    known_source_categories = {
+    # These are geographic/source labels, NOT article topics.
+    regional_categories = {
         "world",
-        "finance",
-        "politics",
-        "disaster",
-        "conflict",
-        "technology",
-        "science",
-        "health",
-        "industry",
-        "sports",
-        "business",
-        "weather",
-        "transportation",
-        "crime",
-        "environment",
+        "africa",
+        "india",
+        "japan",
+        "china",
+        "south-korea",
+        "southeast-asia",
+        "europe",
+        "middle-east",
+        "latin-america",
+        "canada",
+        "australia",
+        "pacific",
+        "south-asia",
+        "east-asia",
+        "oceania",
     }
-
-    # Keep a specific category supplied by the source.
-    if raw in known_source_categories and raw != "world":
-        return raw
 
     lower = (text or "").lower()
 
     scores = {}
+
     for category, terms in CATEGORY_TERMS.items():
         scores[category] = sum(
             1 for term in terms
@@ -110,11 +109,25 @@ def _category(text, source_category):
     best_category = max(scores, key=scores.get)
     best_score = scores[best_category]
 
-    # Don't assign a specific category from weak evidence.
-    if best_score < 2:
-        return raw or "world"
+    # A regional/source label should never become the article topic.
+    if raw in regional_categories:
+        if best_score >= 2:
+            return best_category
+        return "world"
 
-    return best_category
+    # If the source already supplies a specific topic category,
+    # preserve it unless the article strongly indicates another topic.
+    known_topics = set(CATEGORY_TERMS.keys())
+
+    if raw in known_topics:
+        if best_score >= 2 and best_category != raw:
+            return best_category
+        return raw
+
+    if best_score >= 2:
+        return best_category
+
+    return "world"
 
 def classify(title, summary, source_category, item=None):
     item = item or {}
