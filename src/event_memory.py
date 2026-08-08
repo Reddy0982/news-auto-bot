@@ -12,9 +12,28 @@ def init_events(conn):
         first_seen TEXT NOT NULL,
         last_seen TEXT NOT NULL,
         major INTEGER DEFAULT 0,
-        queued_count INTEGER DEFAULT 0
+        queued_count INTEGER DEFAULT 0,
+        canonical_summary TEXT DEFAULT ''
     )
     """)
+
+    # Upgrade existing databases created before
+    # canonical_summary was added.
+    columns = {
+        row[1]
+        for row in conn.execute(
+            "PRAGMA table_info(events)"
+        ).fetchall()
+    }
+
+    if "canonical_summary" not in columns:
+        conn.execute(
+            """
+            ALTER TABLE events
+            ADD COLUMN canonical_summary TEXT DEFAULT ''
+            """
+        )
+
     conn.commit()
 
 
@@ -28,12 +47,16 @@ def _tokens(text):
 
 
 def _sim(a, b):
-    aa, bb = _tokens(a), _tokens(b)
+    aa = _tokens(a)
+    bb = _tokens(b)
 
     if not aa or not bb:
         return 0.0
 
-    return len(aa & bb) / max(1, len(aa | bb))
+    return len(aa & bb) / max(
+        1,
+        len(aa | bb)
+    )
 
 
 def _new_id(title):
@@ -42,10 +65,14 @@ def _new_id(title):
     ).hexdigest()[:24]
 
 
-def _same_event_source(conn, event_id, source):
+def _same_event_source(
+    conn,
+    event_id,
+    source
+):
     """
-    Check whether this source has already produced a story
-    belonging to this event.
+    Check whether this source has already produced
+    a story belonging to this event.
     """
     if not source:
         return False
@@ -57,10 +84,62 @@ def _same_event_source(conn, event_id, source):
         WHERE event_id=? AND source=?
         LIMIT 1
         """,
-        (event_id, source)
+        (
+            event_id,
+            source
+        )
     ).fetchone()
 
     return row is not None
+
+
+def _meaningful_update(
+    item,
+    canonical_title,
+    canonical_summary
+):
+    """
+    Determine whether the incoming story contains
+    meaningful new information compared with the
+    existing event coverage.
+
+    This intentionally uses a conservative rule.
+    """
+    new_title = item.get(
+        "title",
+        ""
+    )
+
+    new_summary = item.get(
+        "summary",
+        ""
+    )
+
+    title_similarity = _sim(
+        new_title,
+        canonical_title
+    )
+
+    summary_similarity = _sim(
+        new_summary,
+        canonical_summary
+    )
+
+    # A substantially different title is potentially
+    # a meaningful development.
+    if title_similarity < 0.55:
+        return True
+
+    # If there is useful summary information and the
+    # summary differs substantially, treat it as an update.
+    if (
+        new_summary
+        and canonical_summary
+        and summary_similarity < 0.55
+    ):
+        return True
+
+    return False
 
 
 def decide(
@@ -69,7 +148,9 @@ def decide(
     memory_hours=48,
     major_memory_hours=168
 ):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(
+        timezone.utc
+    )
 
     rows = conn.execute(
         """
@@ -79,7 +160,8 @@ def decide(
             first_seen,
             last_seen,
             major,
-            queued_count
+            queued_count,
+            canonical_summary
         FROM events
         """
     ).fetchall()
@@ -95,11 +177,15 @@ def decide(
             last_seen,
             major,
             queued_count,
+            canonical_summary,
         ) = row
 
         try:
             last = datetime.fromisoformat(
-                last_seen.replace("Z", "+00:00")
+                last_seen.replace(
+                    "Z",
+                    "+00:00"
+                )
             )
         except Exception:
             continue
@@ -124,8 +210,13 @@ def decide(
             best_sim = sim
             best = row
 
+    # ---------------------------------------------------------
     # No sufficiently similar recent event.
-    if not best or best_sim < 0.42:
+    # ---------------------------------------------------------
+    if (
+        not best
+        or best_sim < 0.42
+    ):
         event_id = _new_id(
             item.get("title", "")
             + "|"
@@ -141,26 +232,45 @@ def decide(
                 first_seen,
                 last_seen,
                 major,
-                queued_count
+                queued_count,
+                canonical_summary
             )
-            VALUES(?,?,?,?,?,?,0)
+            VALUES(?,?,?,?,?,?,?,?)
             """,
             (
                 event_id,
-                item.get("title", ""),
-                item.get("category", "world"),
+                item.get(
+                    "title",
+                    ""
+                ),
+                item.get(
+                    "category",
+                    "world"
+                ),
                 now.isoformat(),
                 now.isoformat(),
                 int(
                     item.get(
                         "priority_score",
-                        item.get("score", 0)
+                        item.get(
+                            "score",
+                            0
+                        )
                     ) >= 85
+                ),
+                0,
+                item.get(
+                    "summary",
+                    ""
                 ),
             )
         )
 
-        return "NEW", event_id, 1.0
+        return (
+            "NEW",
+            event_id,
+            1.0
+        )
 
     (
         event_id,
@@ -169,12 +279,17 @@ def decide(
         last_seen,
         major,
         queued_count,
+        canonical_summary,
     ) = best
 
-    source = item.get("source", "")
+    source = item.get(
+        "source",
+        ""
+    )
 
-    # Same event AND same source means this is a duplicate
-    # of coverage we have already seen.
+    # ---------------------------------------------------------
+    # Same source + same event.
+    # ---------------------------------------------------------
     if _same_event_source(
         conn,
         event_id,
@@ -192,22 +307,83 @@ def decide(
                 int(
                     item.get(
                         "priority_score",
-                        item.get("score", 0)
+                        item.get(
+                            "score",
+                            0
+                        )
                     ) >= 85
                 ),
                 event_id,
             )
         )
 
-        return "DUPLICATE", event_id, best_sim
+        return (
+            "DUPLICATE",
+            event_id,
+            best_sim
+        )
 
-    # Same event from another source.
-    # Keep it as an UPDATE so independent coverage can
-    # provide additional information.
+    # ---------------------------------------------------------
+    # Different source covering the same event.
+    #
+    # Only call it UPDATE if the incoming report contains
+    # meaningfully different information.
+    # ---------------------------------------------------------
+    if _meaningful_update(
+        item,
+        canonical,
+        canonical_summary
+    ):
+        conn.execute(
+            """
+            UPDATE events
+            SET
+                last_seen=?,
+                major=MAX(major,?),
+                canonical_title=?,
+                canonical_summary=?
+            WHERE event_id=?
+            """,
+            (
+                now.isoformat(),
+                int(
+                    item.get(
+                        "priority_score",
+                        item.get(
+                            "score",
+                            0
+                        )
+                    ) >= 85
+                ),
+                item.get(
+                    "title",
+                    canonical
+                ),
+                item.get(
+                    "summary",
+                    canonical_summary
+                ),
+                event_id,
+            )
+        )
+
+        return (
+            "UPDATE",
+            event_id,
+            best_sim
+        )
+
+    # ---------------------------------------------------------
+    # Same event, different source, but no meaningful
+    # new information.
+    #
+    # Do not repost it.
+    # ---------------------------------------------------------
     conn.execute(
         """
         UPDATE events
-        SET last_seen=?,
+        SET
+            last_seen=?,
             major=MAX(major,?)
         WHERE event_id=?
         """,
@@ -216,17 +392,27 @@ def decide(
             int(
                 item.get(
                     "priority_score",
-                    item.get("score", 0)
+                    item.get(
+                        "score",
+                        0
+                    )
                 ) >= 85
             ),
             event_id,
         )
     )
 
-    return "UPDATE", event_id, best_sim
+    return (
+        "DUPLICATE",
+        event_id,
+        best_sim
+    )
 
 
-def mark_queued(conn, event_id):
+def mark_queued(
+    conn,
+    event_id
+):
     conn.execute(
         """
         UPDATE events
