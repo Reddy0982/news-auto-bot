@@ -5,18 +5,28 @@ POST_LIMIT = 270
 
 
 def clean(text):
-    """Normalize whitespace without cutting the text."""
-    return re.sub(r"\s+", " ", text or "").strip()
+    """
+    Normalize whitespace without cutting the text.
+    """
+    return re.sub(
+        r"\s+",
+        " ",
+        text or ""
+    ).strip()
 
 
 def clean_sentence(text):
-    """Clean a sentence and make sure it ends naturally."""
+    """
+    Clean a sentence and make sure it ends naturally.
+    """
     text = clean(text)
 
     if not text:
         return ""
 
-    if text.endswith((".", "!", "?")):
+    if text.endswith(
+        (".", "!", "?")
+    ):
         return text
 
     return text + "."
@@ -24,7 +34,7 @@ def clean_sentence(text):
 
 def split_sentences(text):
     """
-    Split text into readable sentences.
+    Split text into readable complete sentences.
 
     This is intentionally simple and safe for RSS summaries.
     """
@@ -46,41 +56,55 @@ def split_sentences(text):
 
 
 def label(item, breaking_min_score=75):
-    score = item.get("score", 0)
+    """
+    Decide the public news label.
+    """
+
+    score = item.get(
+        "score",
+        0
+    )
+
     confidence = item.get(
         "confidence",
         "low"
     )
+
     category = item.get(
         "category",
         ""
     )
+
     primary = item.get(
         "primary_source",
         False
     )
+
     corroboration = item.get(
         "strong_corroboration",
         0
     )
+
     status = item.get(
         "event_status",
         "NEW"
     )
 
-    # Low-confidence information is never presented as breaking.
+    # Low-confidence information is never
+    # presented as breaking.
     if confidence == "low":
         return "⚠️ UNCONFIRMED"
 
     # Existing event with new information.
     if status == "UPDATE":
+
         if score >= 80:
             return "🔴 UPDATE"
 
         return "📰 NEWS"
 
-    # Breaking requires urgency + reliability +
-    # meaningful verification.
+    # Breaking requires:
+    # urgency + reliability + meaningful verification.
     urgent_categories = {
         "conflict",
         "disaster",
@@ -92,7 +116,9 @@ def label(item, breaking_min_score=75):
     }
 
     urgent = bool(
-        item.get("urgency_terms")
+        item.get(
+            "urgency_terms"
+        )
     )
 
     verified = (
@@ -125,6 +151,7 @@ def choose_context_sentences(
 
     Never cut a sentence in half.
     """
+
     sentences = split_sentences(
         summary
     )
@@ -138,7 +165,10 @@ def choose_context_sentences(
 
 
 def make_source_sentence(source):
-    """Always make the source a complete sentence."""
+    """
+    Always make the source a complete sentence.
+    """
+
     source = clean(
         source or "Unknown"
     )
@@ -155,15 +185,64 @@ def make_headline_sentence(
     label_text,
     title
 ):
-    """Always make the headline a complete sentence."""
+    """
+    Always make the headline a complete sentence.
+    """
+
     title = clean(title)
 
     if title.endswith(
         (".", "!", "?")
     ):
-        return f"{label_text}: {title}"
+        return (
+            f"{label_text}: {title}"
+        )
 
-    return f"{label_text}: {title}."
+    return (
+        f"{label_text}: {title}."
+    )
+
+
+def compact_headline(
+    headline,
+    source_sentence
+):
+    """
+    Compact an unusually long headline using
+    complete words only.
+
+    Never cut a word in half.
+    """
+
+    available = (
+        POST_LIMIT
+        - len(source_sentence)
+        - 1
+    )
+
+    if available <= 0:
+        return ""
+
+    words = headline.split()
+
+    compact_words = []
+
+    for word in words:
+
+        candidate = " ".join(
+            compact_words + [word]
+        )
+
+        if len(candidate) <= available:
+            compact_words.append(
+                word
+            )
+        else:
+            break
+
+    return " ".join(
+        compact_words
+    ).strip()
 
 
 def build_single_post(
@@ -173,17 +252,28 @@ def build_single_post(
     """
     Build one clean X post.
 
+    Preferred format:
+
+        1. News headline
+        2. Useful context
+        3. Source
+
+    If a second useful context sentence also fits:
+
+        1. News headline
+        2. Context
+        3. Additional context
+        4. Source
+
     Target:
         3 to 4 complete sentences.
 
-    Public post contains ONLY:
-        1. News label + headline
-        2. Useful context
-        3. Additional useful context when available
-        4. Source
+    The public post contains only:
+        - label/headline
+        - useful context
+        - source
 
-    Internal verification information is NOT included
-    in the public X post.
+    Internal verification information is NOT published.
     """
 
     lab = label(
@@ -192,15 +282,24 @@ def build_single_post(
     )
 
     title = clean(
-        item.get("title", "")
+        item.get(
+            "title",
+            ""
+        )
     )
 
     summary = clean(
-        item.get("summary", "")
+        item.get(
+            "summary",
+            ""
+        )
     )
 
     source = clean(
-        item.get("source", "Unknown")
+        item.get(
+            "source",
+            "Unknown"
+        )
     )
 
     if not title:
@@ -223,10 +322,11 @@ def build_single_post(
     # ---------------------------------------------------------
     # Candidate 1
     #
-    # Headline + 2 useful context sentences + source
+    # Headline + 2 context sentences + source
     #
-    # Preferred format: 4 sentences.
+    # Four complete sentences.
     # ---------------------------------------------------------
+
     if len(context_sentences) >= 2:
 
         candidate = [
@@ -246,10 +346,11 @@ def build_single_post(
     # ---------------------------------------------------------
     # Candidate 2
     #
-    # Headline + 1 useful context sentence + source
+    # Headline + 1 context sentence + source
     #
-    # Exactly 3 sentences.
+    # Three complete sentences.
     # ---------------------------------------------------------
+
     if len(context_sentences) >= 1:
 
         candidate = [
@@ -270,9 +371,13 @@ def build_single_post(
     #
     # Headline + source.
     #
-    # Only used when the headline/context combination
-    # cannot fit within the X character limit.
+    # This is NOT preferred.
+    #
+    # It is kept only as a safe fallback for the formatter.
+    # choose_format() will normally select a thread when
+    # a 3-sentence single post cannot fit.
     # ---------------------------------------------------------
+
     candidate = [
         headline,
         source_sentence,
@@ -286,39 +391,20 @@ def build_single_post(
         return post
 
     # ---------------------------------------------------------
-    # Extremely long title fallback.
+    # Extremely long headline fallback.
     #
-    # Preserve complete words and always keep the source.
+    # Preserve complete words.
+    # Always keep the source.
     # ---------------------------------------------------------
-    available = (
-        POST_LIMIT
-        - len(source_sentence)
-        - 1
+
+    compact = compact_headline(
+        headline,
+        source_sentence
     )
 
-    words = headline.split()
-    compact_words = []
-
-    for word in words:
-
-        test = " ".join(
-            compact_words + [word]
-        )
-
-        if len(test) <= available:
-            compact_words.append(
-                word
-            )
-        else:
-            break
-
-    compact_headline = " ".join(
-        compact_words
-    )
-
-    if compact_headline:
+    if compact:
         return (
-            f"{compact_headline} "
+            f"{compact} "
             f"{source_sentence}"
         )
 
@@ -327,47 +413,108 @@ def build_single_post(
 
 def choose_format(item):
     """
-    Use a thread only when the story genuinely contains
-    enough important information to justify one.
+    Choose single or thread based on whether a valid
+    3-sentence single post can actually be produced.
+
+    A proper single post requires:
+
+        1. Headline
+        2. At least one useful context sentence
+        3. Source
+
+    If that cannot fit within POST_LIMIT,
+    use a thread.
+
+    This prevents the formatter from silently producing
+    a low-information two-sentence post.
     """
 
-    summary_length = len(
+    title = clean(
+        item.get(
+            "title",
+            ""
+        )
+    )
+
+    summary = clean(
         item.get(
             "summary",
             ""
         )
     )
 
-    score = item.get(
-        "score",
-        0
+    if not title:
+        return "single"
+
+    breaking_min_score = item.get(
+        "breaking_min_score",
+        75
     )
 
-    corroboration = item.get(
-        "strong_corroboration",
-        0
+    lab = label(
+        item,
+        breaking_min_score
     )
 
-    status = item.get(
-        "event_status",
-        "NEW"
+    headline = make_headline_sentence(
+        lab,
+        title
     )
 
-    if (
-        status == "UPDATE"
-        and score >= 85
-        and summary_length > 500
-    ):
+    source_sentence = make_source_sentence(
+        item.get(
+            "source",
+            "Unknown"
+        )
+    )
+
+    context_sentences = choose_context_sentences(
+        summary,
+        2
+    )
+
+    # ---------------------------------------------------------
+    # First choice:
+    #
+    # Try a proper 3-sentence single post.
+    # ---------------------------------------------------------
+
+    if context_sentences:
+
+        candidate = " ".join([
+            headline,
+            context_sentences[0],
+            source_sentence,
+        ])
+
+        if len(candidate) <= POST_LIMIT:
+            return "single"
+
+    # ---------------------------------------------------------
+    # If useful context exists but the single post does
+    # not fit, use a thread.
+    # ---------------------------------------------------------
+
+    if context_sentences:
         return "thread"
 
-    if (
-        score >= 92
-        and corroboration >= 2
-        and summary_length > 500
-    ):
-        return "thread"
+    # ---------------------------------------------------------
+    # No usable context.
+    #
+    # Keep it single only if headline + source fit.
+    # Otherwise use a thread so the thread builder can
+    # safely handle the long headline.
+    # ---------------------------------------------------------
 
-    return "single"
+    fallback = " ".join([
+        headline,
+        source_sentence,
+    ])
+
+    if len(fallback) <= POST_LIMIT:
+        return "single"
+
+    return "thread"
 
 
 def build_thread(
@@ -377,8 +524,10 @@ def build_thread(
     """
     Build a small thread from complete sentences.
 
-    Every post remains independently readable
-    and <= POST_LIMIT.
+    Every post remains:
+        - complete
+        - readable
+        - <= POST_LIMIT
 
     Verification metadata is NOT published.
     """
@@ -389,11 +538,17 @@ def build_thread(
     )
 
     title = clean(
-        item.get("title", "")
+        item.get(
+            "title",
+            ""
+        )
     )
 
     summary = clean(
-        item.get("summary", "")
+        item.get(
+            "summary",
+            ""
+        )
     )
 
     source = clean(
@@ -413,13 +568,54 @@ def build_thread(
         title
     )
 
-    posts = [
-        first
-    ]
+    # ---------------------------------------------------------
+    # Guarantee that the first post is <= POST_LIMIT.
+    # ---------------------------------------------------------
+
+    if len(first) > POST_LIMIT:
+
+        words = first.split()
+
+        compact_words = []
+
+        for word in words:
+
+            candidate = " ".join(
+                compact_words + [word]
+            )
+
+            if len(candidate) <= POST_LIMIT:
+                compact_words.append(
+                    word
+                )
+            else:
+                break
+
+        first = " ".join(
+            compact_words
+        ).strip()
+
+    posts = []
+
+    if first:
+        posts.append(
+            first
+        )
 
     current = ""
 
+    # ---------------------------------------------------------
+    # Add complete context sentences.
+    # ---------------------------------------------------------
+
     for sentence in context:
+
+        sentence = clean_sentence(
+            sentence
+        )
+
+        if not sentence:
+            continue
 
         candidate = (
             sentence
@@ -428,9 +624,11 @@ def build_thread(
         )
 
         if len(candidate) <= POST_LIMIT:
+
             current = candidate
 
         else:
+
             if current:
                 posts.append(
                     current
@@ -443,34 +641,82 @@ def build_thread(
             current
         )
 
-    source_line = make_source_sentence(
+    # ---------------------------------------------------------
+    # Add source to final post when possible.
+    # ---------------------------------------------------------
+
+    source_sentence = make_source_sentence(
         source
     )
 
-    # Add source to the final thread post
-    # when it fits.
-    if (
+    if not posts:
+        posts.append(
+            source_sentence
+        )
+
+    elif (
         len(posts[-1])
-        + len(source_line)
+        + len(source_sentence)
         + 1
         <= POST_LIMIT
     ):
+
         posts[-1] = (
             f"{posts[-1]} "
-            f"{source_line}"
+            f"{source_sentence}"
         )
+
     else:
+
         posts.append(
-            source_line
+            source_sentence
         )
 
-    posts = [
-        post.strip()
-        for post in posts
-        if post.strip()
-    ]
+    # ---------------------------------------------------------
+    # Final safety cleanup.
+    # ---------------------------------------------------------
 
-    return posts
+    cleaned_posts = []
+
+    for post in posts:
+
+        post = clean(post)
+
+        if not post:
+            continue
+
+        # Every thread post must stay within
+        # the hard limit.
+        if len(post) > POST_LIMIT:
+
+            words = post.split()
+
+            compact_words = []
+
+            for word in words:
+
+                candidate = " ".join(
+                    compact_words + [word]
+                )
+
+                if len(candidate) <= POST_LIMIT:
+                    compact_words.append(
+                        word
+                    )
+                else:
+                    break
+
+            post = " ".join(
+                compact_words
+            ).strip()
+
+        if post:
+            cleaned_posts.append(
+                post
+            )
+
+    # Maximum thread length.
+    return cleaned_posts[:7]
 
 
 def format_story(
@@ -486,6 +732,7 @@ def format_story(
     )
 
     if chosen_format == "thread":
+
         return {
             "format": "thread",
             "thread": build_thread(
