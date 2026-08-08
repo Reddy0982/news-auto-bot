@@ -79,3 +79,18 @@ def test_politics_story():
     )
 
     assert result["category"] == "politics", result
+    
+def test_ebola_story_is_health_not_region():
+    item = {
+        "primary_source": False,
+        "tier": 2,
+    }
+
+    result = classify(
+        "More than 300 children have died from Ebola since start of DRC outbreak",
+        "More than 300 children have died from Ebola since the outbreak began in the Democratic Republic of Congo.",
+        "africa",
+        item,
+    )
+
+    assert result["category"] == "health", result
