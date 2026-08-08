@@ -27,12 +27,51 @@ def fit_sentences(sentences, limit=280):
     return text if len(text) <= limit else text[:limit-1].rstrip() + "…"
 
 def label(item, breaking_min_score=75):
-    if item.get("event_status") == "UPDATE":
-        return "🔴 UPDATE"
-    if item.get("confidence") == "high" and item.get("score", 0) >= breaking_min_score:
-        return "🚨 BREAKING"
-    if item.get("confidence") == "low":
+    score = item.get("score", 0)
+    confidence = item.get("confidence", "low")
+    category = item.get("category", "")
+    primary = item.get("primary_source", False)
+    corroboration = item.get("strong_corroboration", 0)
+    status = item.get("event_status", "NEW")
+
+    # Low-confidence information is never presented as breaking.
+    if confidence == "low":
         return "⚠️ UNCONFIRMED"
+
+    # Existing event with new information.
+    if status == "UPDATE":
+        if score >= 80:
+            return "🔴 UPDATE"
+        return "📰 NEWS"
+
+    # Breaking requires urgency + reliability + meaningful verification.
+    urgent_categories = {
+        "conflict",
+        "disaster",
+        "politics",
+        "finance",
+        "health",
+        "cybersecurity",
+        "world",
+    }
+
+    urgent = bool(item.get("urgency_terms"))
+
+    verified = primary or corroboration >= 2
+
+    if (
+        score >= breaking_min_score
+        and confidence == "high"
+        and category in urgent_categories
+        and urgent
+        and verified
+    ):
+        return "🚨 BREAKING"
+
+    # Important but not breaking.
+    if score >= 55:
+        return "📰 NEWS"
+
     return "📰 DEVELOPING"
 
 def choose_format(item):
