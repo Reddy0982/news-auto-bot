@@ -11,31 +11,110 @@ URGENT_TERMS = {
 }
 
 CATEGORY_TERMS = {
-    "finance": {"bank","stocks","stock market","bond","inflation","interest rate","central bank",
-                "economy","economic","tariff","trade","earnings","revenue","ipo","debt","default"},
-    "politics": {"president","prime minister","government","election","parliament","senate",
-                 "minister","vote","coalition","sanctions","diplomatic"},
-    "disaster": {"earthquake","tsunami","hurricane","cyclone","tornado","flood","wildfire",
-                 "volcano","eruption","landslide","evacuation","disaster"},
-    "conflict": {"war","attack","airstrike","missile","invasion","ceasefire","coup","military"},
-    "technology": {"technology","ai","artificial intelligence","chip","semiconductor","software",
-                   "cybersecurity","cyberattack","data breach","robot"},
-    "science": {"science","research","study","space","nasa","esa","astronomy"},
-    "health": {"health","disease","virus","outbreak","hospital","who","vaccine","pandemic"},
-    "industry": {"company","factory","manufacturing","oil","gas","energy","automotive","aviation",
-                 "shipping","industry","production"},
+    "finance": {
+        "bank", "stocks", "stock market", "bond", "inflation",
+        "interest rate", "central bank", "economy", "economic",
+        "tariff", "trade", "earnings", "revenue", "ipo",
+        "debt", "default"
+    },
+
+    "politics": {
+        "president", "prime minister", "government", "election",
+        "parliament", "senate", "minister", "vote", "coalition",
+        "sanctions", "diplomatic"
+    },
+
+    "disaster": {
+        "earthquake", "tsunami", "hurricane", "cyclone",
+        "tornado", "flood", "wildfire", "volcano", "eruption",
+        "landslide", "evacuation", "disaster"
+    },
+
+    "conflict": {
+        "war", "attack", "airstrike", "missile", "invasion",
+        "ceasefire", "coup", "military"
+    },
+
+    "technology": {
+        "technology", "ai", "artificial intelligence", "chip",
+        "semiconductor", "software", "cybersecurity",
+        "cyberattack", "data breach", "robot"
+    },
+
+    "science": {
+        "science", "research", "study", "scientist", "astronomy",
+        "biology", "physics", "chemistry"
+    },
+
+    "space": {
+        "space", "nasa", "esa", "jpl", "moon", "mars",
+        "rocket", "satellite", "astronaut", "orbit",
+        "spacecraft", "launch"
+    },
+
+    "health": {
+        "health", "disease", "virus", "outbreak", "hospital",
+        "who", "vaccine", "pandemic"
+    },
+
+    "industry": {
+        "company", "factory", "manufacturing", "oil", "gas",
+        "energy", "automotive", "aviation", "shipping",
+        "industry", "production"
+    },
+
+    "sports": {
+        "football", "soccer", "cricket", "tennis", "basketball",
+        "baseball", "golf", "formula 1", "f1", "olympics",
+        "athlete", "championship", "tournament", "league"
+    },
 }
 
 def _words(text):
     return set(re.findall(r"[a-z0-9][a-z0-9'-]*", (text or "").lower()))
 
 def _category(text, source_category):
-    raw = (source_category or "").lower()
-    if raw in CATEGORY_TERMS:
+    raw = (source_category or "").lower().strip()
+
+    known_source_categories = {
+        "world",
+        "finance",
+        "politics",
+        "disaster",
+        "conflict",
+        "technology",
+        "science",
+        "health",
+        "industry",
+        "sports",
+        "business",
+        "weather",
+        "transportation",
+        "crime",
+        "environment",
+    }
+
+    # Keep a specific category supplied by the source.
+    if raw in known_source_categories and raw != "world":
         return raw
+
     lower = (text or "").lower()
-    scores = {cat: sum(1 for term in terms if term in lower) for cat, terms in CATEGORY_TERMS.items()}
-    return max(scores, key=scores.get) if max(scores.values(), default=0) else (raw or "world")
+
+    scores = {}
+    for category, terms in CATEGORY_TERMS.items():
+        scores[category] = sum(
+            1 for term in terms
+            if term in lower
+        )
+
+    best_category = max(scores, key=scores.get)
+    best_score = scores[best_category]
+
+    # Don't assign a specific category from weak evidence.
+    if best_score < 2:
+        return raw or "world"
+
+    return best_category
 
 def classify(title, summary, source_category, item=None):
     item = item or {}
