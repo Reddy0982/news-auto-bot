@@ -65,32 +65,46 @@ def _similarity(a, b):
     if not aa or not bb:
         return 0.0
     return len(aa & bb) / max(1, len(aa | bb))
-
 def verify(item, all_items):
-    title = item.get("title","")
-    summary = item.get("summary","")
+    title = item.get("title", "")
     matches = []
+
     for other in all_items:
         if other.get("id") == item.get("id"):
             continue
-        sim = _similarity(title, other.get("title",""))
+
+        # A source cannot independently corroborate itself.
+        if other.get("source") == item.get("source"):
+            continue
+
+        sim = _similarity(title, other.get("title", ""))
+
         if sim >= 0.38:
             matches.append((sim, other))
+
     matches.sort(reverse=True, key=lambda x: x[0])
+
     corroborating = []
     strong = []
     seen_sources = set()
+
     for sim, other in matches:
-        src = other.get("source")
-        if not src or src in seen_sources:
+        source = other.get("source")
+
+        if not source or source in seen_sources:
             continue
-        seen_sources.add(src)
+
+        seen_sources.add(source)
         corroborating.append(other)
+
         if other.get("tier", 4) <= 2:
             strong.append(other)
+
     return {
         "corroborating_sources": len(corroborating),
         "strong_corroboration": len(strong),
-        "corroborating_source_names": [x.get("source") for x in strong[:5]],
+        "corroborating_source_names": [
+            x.get("source") for x in strong[:5]
+        ],
         "verified_match_count": len(matches),
     }
