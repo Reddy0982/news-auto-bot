@@ -39,7 +39,10 @@ def sid(u, t):
 
 
 def db():
-    DB.parent.mkdir(parents=True, exist_ok=True)
+    DB.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
 
     c = sqlite3.connect(DB)
 
@@ -67,7 +70,10 @@ def db():
 def fetch():
     raw, health = collect(
         CONFIG["feeds"],
-        CONFIG.get("max_feed_entries_per_source", 25),
+        CONFIG.get(
+            "max_feed_entries_per_source",
+            25
+        ),
         12,
         max_age_hours=48,
     )
@@ -112,8 +118,17 @@ def fetch():
                 False
             ),
             "summary": s,
+
             "published_at": item.get(
                 "published_at"
+            ),
+
+            "updated_at": item.get(
+                "updated_at"
+            ),
+
+            "effective_at": item.get(
+                "effective_at"
             ),
         })
 
@@ -125,12 +140,19 @@ def translate_candidate(x):
         x["title"] + "\n\n" + x["summary"]
     )
 
-    parts = result["text"].split("\n", 1)
+    parts = result["text"].split(
+        "\n",
+        1
+    )
 
-    x["title"] = clean(parts[0])
+    x["title"] = clean(
+        parts[0]
+    )
 
     x["summary"] = clean(
-        parts[1] if len(parts) > 1 else ""
+        parts[1]
+        if len(parts) > 1
+        else ""
     )
 
     x["translated_from"] = result.get(
@@ -162,10 +184,6 @@ def main():
 
     # ---------------------------------------------------------
     # Per-run statistics
-    #
-    # These describe THIS run only.
-    # They are different from metrics.py's historical
-    # database totals.
     # ---------------------------------------------------------
     run_stats = {
         "fetched": len(items),
@@ -190,10 +208,15 @@ def main():
             (x["id"],)
         ).fetchone():
 
-            run_stats["already_seen"] += 1
+            run_stats[
+                "already_seen"
+            ] += 1
+
             continue
 
-        run_stats["new_candidates"] += 1
+        run_stats[
+            "new_candidates"
+        ] += 1
 
         # -----------------------------------------------------
         # Language
@@ -271,7 +294,9 @@ def main():
                     "Translation unavailable"
                 )
 
-                x["translation_error"] = str(exc)
+                x["translation_error"] = str(
+                    exc
+                )
 
                 held.append(x)
 
