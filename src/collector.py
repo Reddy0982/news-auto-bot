@@ -1,28 +1,45 @@
-import json
+import feedparser
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
-from pathlib import Path
-
-import feedparser
-
-ROOT = Path(__file__).resolve().parents[1]
-HEALTH = ROOT / "data" / "source_health.json"
-
+from datetime import datetime, timezone, timedelta
 
 def clean(t):
-    return re.sub(r"\\s+", " ", re.sub(r"<[^>]+>", " ", t or "")).strip()
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", t or "")).strip()
 
+def parse_entry_time(entry):
+    for key in ("published_parsed", "updated_parsed"):
+        value = entry.get(key)
+        if value:
+            try:
+                return datetime(*value[:6], tzinfo=timezone.utc)
+            except Exception:
+                pass
+    return None
 
-def fetch_one(feed, limit=25):
-    checked_at = datetime.now(timezone.utc).isoformat()
+def is_recent(dt, max_age_hours=48):
+    if dt is None:
+        return False
+    age = datetime.now(timezone.utc) - dt
+    return timedelta(0) <= age <= timedelta(hours=max_age_hours)
+
+def fetch_one(feed, limit=25, max_age_hours=48):
     try:
         parsed = feedparser.parse(feed["url"])
         rows = []
+        error = None
+        if getattr(parsed, "bozo", False) and not parsed.entries:
+            error = str(getattr(parsed, "bozo_exception", "feed parse error"))
+
         for e in parsed.entries[:limit]:
             title = clean(e.get("title", ""))
             url = e.get("link", "")
             summary = clean(e.get("summary", "") or e.get("description", ""))
+            published_at = parse_entry_time(e)
+
+            # Only today's or yesterday's material is eligible.
+            if not is_recent(published_at, max_age_hours):
+                continue
+
             if title and url:
                 rows.append({
                     "title": title,
@@ -34,44 +51,35 @@ def fetch_one(feed, limit=25):
                     "region": feed.get("region"),
                     "discovery": feed.get("discovery", False),
                     "summary": summary[:700],
+                    "published_at": published_at.isoformat(),
                 })
-        status = getattr(parsed, "status", None)
-        if status is None:
-            status = 200 if rows else 0
-        health = {
-            "name": feed["name"],
+
+        return rows, {
+            "source": feed["name"],
             "url": feed["url"],
-            "status": status,
-            "entries": len(rows),
-            "error": None,
-            "checked_at": checked_at,
+            "status": getattr(parsed, "status", None),
+            "entries_seen": len(parsed.entries),
+            "recent_entries": len(rows),
+            "error": error,
         }
-        return rows, health
+
     except Exception as exc:
         return [], {
-            "name": feed["name"],
+            "source": feed["name"],
             "url": feed["url"],
-            "status": 0,
-            "entries": 0,
+            "status": None,
+            "entries_seen": 0,
+            "recent_entries": 0,
             "error": str(exc),
-            "checked_at": checked_at,
         }
 
-
-def collect(feeds, limit=25, workers=12):
+def collect(feeds, limit=25, workers=12, max_age_hours=48):
     out = []
     health = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        jobs = [pool.submit(fetch_one, f, limit) for f in feeds]
+        jobs = [pool.submit(fetch_one, f, limit, max_age_hours) for f in feeds]
         for job in as_completed(jobs):
-            rows, result = job.result()
+            rows, source_result = job.result()
             out.extend(rows)
-            health.append(result)
-
-    health.sort(key=lambda x: x["name"].lower())
-    HEALTH.parent.mkdir(parents=True, exist_ok=True)
-    HEALTH.write_text(json.dumps({
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "sources": health,
-    }, indent=2, ensure_ascii=False))
-    return out
+            health.append(source_result)
+    return out, health
