@@ -98,6 +98,9 @@ jobs:
             git -C /tmp/news-state remote add origin "${{ github.server_url }}/${{ github.repository }}.git"
           fi
 
+          git -C /tmp/news-state config user.name "world-news-bot"
+          git -C /tmp/news-state config user.email "world-news-bot@users.noreply.github.com"
+
           mkdir -p /tmp/news-state/data
           cp data/news.db /tmp/news-state/data/news.db
           cd /tmp/news-state
