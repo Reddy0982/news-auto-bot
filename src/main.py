@@ -183,6 +183,12 @@ def main():
     held = []
 
     # ---------------------------------------------------------
+    # Diagnostic list for stories rejected by score.
+    # This does NOT change the scoring or queue logic.
+    # ---------------------------------------------------------
+    below_score_stories = []
+
+    # ---------------------------------------------------------
     # Per-run statistics
     # ---------------------------------------------------------
     run_stats = {
@@ -358,6 +364,7 @@ def main():
         # Duplicate
         # -----------------------------------------------------
         if status == "DUPLICATE":
+
             run_stats[
                 "duplicates"
             ] += 1
@@ -374,9 +381,40 @@ def main():
         )
 
         if x["score"] < min_score:
+
             run_stats[
                 "below_score"
             ] += 1
+
+            # Record the story so we can inspect
+            # why it was rejected.
+            below_score_stories.append({
+                "title": x.get(
+                    "title",
+                    ""
+                ),
+                "score": x.get(
+                    "score",
+                    0
+                ),
+                "required_score": min_score,
+                "category": x.get(
+                    "category",
+                    ""
+                ),
+                "source": x.get(
+                    "source",
+                    ""
+                ),
+                "confidence": x.get(
+                    "confidence",
+                    ""
+                ),
+                "priority_level": x.get(
+                    "priority_level",
+                    ""
+                ),
+            })
 
             continue
 
@@ -393,6 +431,7 @@ def main():
                 "primary_source"
             )
         ):
+
             x["hold_reason"] = (
                 "Discovery lead awaiting "
                 "independent confirmation"
@@ -413,6 +452,7 @@ def main():
             x["confidence"] == "low"
             and x["tier"] >= 3
         ):
+
             run_stats[
                 "low_confidence_rejected"
             ] += 1
@@ -437,6 +477,7 @@ def main():
         )
 
         if not x["quality_pass"]:
+
             x["hold_reason"] = (
                 "Quality check failed"
             )
@@ -562,6 +603,26 @@ def main():
             ensure_ascii=False,
         )
     )
+
+    # ---------------------------------------------------------
+    # Below-score diagnostics
+    # ---------------------------------------------------------
+    if below_score_stories:
+
+        print(
+            "\nBELOW SCORE STORIES"
+        )
+
+        for story in below_score_stories:
+
+            print(
+                f"[{story['score']}/"
+                f"{story['required_score']}] "
+                f"{story['category']} | "
+                f"{story['confidence']} | "
+                f"{story['source']} | "
+                f"{story['title']}"
+            )
 
 
 if __name__ == "__main__":
