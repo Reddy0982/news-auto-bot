@@ -25,6 +25,7 @@ def clean_sentence(text):
 def split_sentences(text):
     """
     Split text into readable sentences.
+
     This is intentionally simple and safe for RSS summaries.
     """
     text = clean(text)
@@ -116,7 +117,7 @@ def choose_context_sentences(summary, max_sentences=2):
     """
     Select the most useful complete sentences from the source summary.
 
-    We never cut a sentence in half.
+    Never cut a sentence in half.
     """
     sentences = split_sentences(summary)
 
@@ -126,12 +127,40 @@ def choose_context_sentences(summary, max_sentences=2):
     return sentences[:max_sentences]
 
 
+def make_source_sentence(source):
+    """Always make the source a complete sentence."""
+    source = clean(source or "Unknown")
+
+    if source.endswith((".", "!", "?")):
+        return f"Source: {source}"
+
+    return f"Source: {source}."
+
+
+def make_headline_sentence(label_text, title):
+    """Always make the headline a complete sentence."""
+    title = clean(title)
+
+    if title.endswith((".", "!", "?")):
+        return f"{label_text}: {title}"
+
+    return f"{label_text}: {title}."
+
+
 def build_single_post(item, breaking_min_score=75):
     """
     Build one clean X post.
 
-    The function prefers fewer complete sentences over
-    cutting a sentence with an ellipsis.
+    Target:
+        3 to 4 complete sentences.
+
+    Priority:
+        1. Headline
+        2. Useful source information
+        3. Verification when available
+        4. Source
+
+    The formatter never cuts a sentence in half.
     """
     lab = label(item, breaking_min_score)
 
@@ -142,82 +171,178 @@ def build_single_post(item, breaking_min_score=75):
     if not title:
         return ""
 
-    headline = f"{lab}: {title}"
-
-    # Keep the headline intact whenever possible.
-    # If an unusually long RSS headline exceeds the limit,
-    # use it as-is rather than cutting it in the middle.
-    parts = [headline]
-
-    context_sentences = choose_context_sentences(summary, 2)
+    headline = make_headline_sentence(lab, title)
+    source_sentence = make_source_sentence(source)
     verification = verification_sentence(item)
 
-    # Try:
-    # headline
-    # blank line
-    # context
-    # blank line
-    # verification
-    # source
-    #
-    # Then progressively remove less important material
-    # until the post fits naturally.
+    context_sentences = choose_context_sentences(summary, 2)
 
-    candidates = []
-
-    if len(context_sentences) >= 2:
-        candidates.append(
-            [
-                headline,
-                " ".join(context_sentences[:2]),
-                verification,
-                f"Source: {source}",
-            ]
-        )
-
-    if len(context_sentences) >= 1:
-        candidates.append(
-            [
-                headline,
-                context_sentences[0],
-                verification,
-                f"Source: {source}",
-            ]
-        )
-
-    candidates.append(
-        [
-            headline,
-            verification,
-            f"Source: {source}",
-        ]
-    )
-
-    candidates.append(
-        [
-            headline,
-            f"Source: {source}",
-        ]
-    )
-
-    for candidate in candidates:
+    # ---------------------------------------------------------
+    # Candidate 1:
+    # Headline + 2 context sentences + verification + source
+    # This gives up to 5 sentences, so only use it when the
+    # verification sentence is absent.
+    # ---------------------------------------------------------
+    if len(context_sentences) >= 2 and not verification:
         candidate = [
-            clean(part)
-            for part in candidate
-            if clean(part)
+            headline,
+            context_sentences[0],
+            context_sentences[1],
+            source_sentence,
         ]
 
-        # One blank line between major sections.
-        post = "\n\n".join(candidate)
+        post = " ".join(candidate)
 
         if len(post) <= POST_LIMIT:
             return post
 
-    # Extremely long headline fallback.
+    # ---------------------------------------------------------
+    # Candidate 2:
+    # Headline + 2 context sentences + source
+    # Exactly 4 sentences.
+    # ---------------------------------------------------------
+    if len(context_sentences) >= 2:
+        candidate = [
+            headline,
+            context_sentences[0],
+            context_sentences[1],
+            source_sentence,
+        ]
+
+        post = " ".join(candidate)
+
+        if len(post) <= POST_LIMIT:
+            return post
+
+    # ---------------------------------------------------------
+    # Candidate 3:
+    # Headline + 1 context sentence + verification + source
+    # Exactly 4 sentences when verification exists.
+    # ---------------------------------------------------------
+    if len(context_sentences) >= 1 and verification:
+        candidate = [
+            headline,
+            context_sentences[0],
+            verification,
+            source_sentence,
+        ]
+
+        post = " ".join(candidate)
+
+        if len(post) <= POST_LIMIT:
+            return post
+
+    # ---------------------------------------------------------
+    # Candidate 4:
+    # Headline + 2 context sentences + source
     #
-    # We still avoid cutting the headline in the middle.
-    # If the headline itself is too long, use a compact
-    # title made from complete words.
+    # Re-check without verification.
+    # This is the preferred 4-sentence structure for stories
+    # where independent verification wording is unavailable.
+    # ---------------------------------------------------------
+    if len(context_sentences) >= 2:
+        candidate = [
+            headline,
+            context_sentences[0],
+            context_sentences[1],
+            source_sentence,
+        ]
+
+        post = " ".join(candidate)
+
+        if len(post) <= POST_LIMIT:
+            return post
+
+    # ---------------------------------------------------------
+    # Candidate 5:
+    # Headline + 1 context sentence + source
+    #
+    # This is exactly 3 sentences and is the normal fallback.
+    # ---------------------------------------------------------
+    if len(context_sentences) >= 1:
+        candidate = [
+            headline,
+            context_sentences[0],
+            source_sentence,
+        ]
+
+        post = " ".join(candidate)
+
+        if len(post) <= POST_LIMIT:
+            return post
+
+    # ---------------------------------------------------------
+    # Candidate 6:
+    # Headline + verification + source
+    #
+    # This is also 3 sentences when verification exists.
+    # ---------------------------------------------------------
+    if verification:
+        candidate = [
+            headline,
+            verification,
+            source_sentence,
+        ]
+
+        post = " ".join(candidate)
+
+        if len(post) <= POST_LIMIT:
+            return post
+
+    # ---------------------------------------------------------
+    # Extremely long story/title.
+    #
+    # Preserve complete words and still create a valid
+    # 3-sentence post where possible.
+    # ---------------------------------------------------------
+    available = (
+        POST_LIMIT
+        - len(headline)
+        - len(source_sentence)
+        - 2
+    )
+
+    if verification:
+        available -= len(verification) + 1
+
+    if available > 20 and context_sentences:
+        words = context_sentences[0].split()
+        shortened = []
+
+        for word in words:
+            candidate_text = " ".join(shortened + [word])
+
+            if len(candidate_text) <= available:
+                shortened.append(word)
+            else:
+                break
+
+        if shortened:
+            shortened_sentence = clean_sentence(
+                " ".join(shortened)
+            )
+
+            candidate = [
+                headline,
+                shortened_sentence,
+            ]
+
+            if verification:
+                candidate.append(verification)
+
+            candidate.append(source_sentence)
+
+            post = " ".join(candidate)
+
+            if len(post) <= POST_LIMIT:
+                return post
+
+    # ---------------------------------------------------------
+    # Final fallback.
+    #
+    # Keep the source and headline. This should only happen for
+    # an unusually long headline with no usable summary.
+    # ---------------------------------------------------------
     words = headline.split()
 
     compact_words = []
@@ -225,14 +350,17 @@ def build_single_post(item, breaking_min_score=75):
     for word in words:
         test = " ".join(compact_words + [word])
 
-        if len(test) + len(f"\n\nSource: {source}") <= POST_LIMIT:
+        if len(test) + 1 + len(source_sentence) <= POST_LIMIT:
             compact_words.append(word)
         else:
             break
 
     compact_headline = " ".join(compact_words)
 
-    return f"{compact_headline}\n\nSource: {source}"
+    if compact_headline:
+        return f"{compact_headline} {source_sentence}"
+
+    return source_sentence
 
 
 def choose_format(item):
@@ -276,20 +404,25 @@ def build_thread(item, breaking_min_score=75):
 
     context = choose_context_sentences(summary, 5)
 
-    first = f"{lab}: {title}"
+    first = make_headline_sentence(lab, title)
 
     posts = [first]
 
     current = ""
 
     for sentence in context:
-        candidate = sentence if not current else f"{current} {sentence}"
+        candidate = (
+            sentence
+            if not current
+            else f"{current} {sentence}"
+        )
 
         if len(candidate) <= POST_LIMIT:
             current = candidate
         else:
             if current:
                 posts.append(current)
+
             current = sentence
 
     if current:
@@ -298,19 +431,24 @@ def build_thread(item, breaking_min_score=75):
     verification = verification_sentence(item)
 
     if verification:
-        if len(posts[-1]) + len(verification) + 1 <= POST_LIMIT:
+        if (
+            len(posts[-1]) + len(verification) + 1
+            <= POST_LIMIT
+        ):
             posts[-1] = f"{posts[-1]} {verification}"
         else:
             posts.append(verification)
 
-    source_line = f"Source: {source}"
+    source_line = make_source_sentence(source)
 
-    if len(posts[-1]) + len(source_line) + 1 <= POST_LIMIT:
+    if (
+        len(posts[-1]) + len(source_line) + 1
+        <= POST_LIMIT
+    ):
         posts[-1] = f"{posts[-1]} {source_line}"
     else:
         posts.append(source_line)
 
-    # Guarantee the limit.
     posts = [
         post.strip()
         for post in posts
@@ -331,7 +469,7 @@ def format_story(item, breaking_min_score=75):
             "format": "thread",
             "thread": build_thread(
                 item,
-                breaking_min_score
+                breaking_min_score,
             ),
         }
 
@@ -339,6 +477,6 @@ def format_story(item, breaking_min_score=75):
         "format": "single",
         "post": build_single_post(
             item,
-            breaking_min_score
+            breaking_min_score,
         ),
     }
