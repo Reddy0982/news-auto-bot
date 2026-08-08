@@ -28,7 +28,9 @@ def load_json(path, default):
 
     try:
         return json.loads(
-            path.read_text()
+            path.read_text(
+                encoding="utf-8"
+            )
         )
 
     except Exception:
@@ -42,7 +44,7 @@ def source_recent_entries(source):
     New collector format:
         recent_entries
 
-    Older format:
+    Older collector format:
         entries
     """
 
@@ -57,7 +59,9 @@ def source_recent_entries(source):
         )
 
     try:
-        return int(value or 0)
+        return int(
+            value or 0
+        )
 
     except Exception:
         return 0
@@ -65,13 +69,13 @@ def source_recent_entries(source):
 
 def current_quality_failures(queue):
     """
-    Count quality failures from the CURRENT queue run.
+    Count quality failures in the CURRENT queue.
 
-    This intentionally does NOT use the cumulative
-    metrics.json quality_failures value.
+    These stories are already held and therefore
+    should NOT block valid stories from continuing.
 
-    A historical quality failure should not permanently
-    turn the health gate RED.
+    A quality failure is treated as a per-story problem,
+    not a system-wide RED condition.
     """
 
     count = 0
@@ -163,14 +167,12 @@ def main():
                 "status"
             )
 
-            # A source is considered unusable when:
+            # A source is unusable only when:
             #
             # 1. It returned no usable entries
             # AND
-            # 2. It did not return a normal HTTP success
-            #
-            # This preserves the existing safety logic while
-            # using the collector's actual field name.
+            # 2. It did not return a normal HTTP success.
+
             if (
                 recent_entries == 0
                 and status not in (
@@ -240,21 +242,19 @@ def main():
     )
 
     # -----------------------------------------------------
-    # IMPORTANT:
+    # IMPORTANT CHANGE
     #
-    # Do NOT use:
+    # Quality failures are NOT RED anymore.
     #
-    #     metrics["quality_failures"]
-    #
-    # to determine current health.
-    #
-    # That value can contain historical failures.
+    # A failed story is held and ignored.
+    # Other valid stories can continue.
     # -----------------------------------------------------
 
     if current_quality_failures_count > 0:
 
-        reasons.append(
-            "current quality failures detected"
+        warnings.append(
+            f"{current_quality_failures_count} "
+            "story/stories held because of quality failure"
         )
 
     # -----------------------------------------------------
@@ -314,7 +314,25 @@ def main():
         )
 
     # -----------------------------------------------------
-    # Determine status
+    # No ready stories
+    #
+    # IMPORTANT:
+    #
+    # This is NOT RED.
+    #
+    # Having zero ready stories simply means there
+    # is nothing to publish during this run.
+    # The next collection cycle can try again.
+    # -----------------------------------------------------
+
+    if ready == 0:
+
+        warnings.append(
+            "no stories are currently ready"
+        )
+
+    # -----------------------------------------------------
+    # Determine health status
     # -----------------------------------------------------
 
     if reasons:
@@ -357,9 +375,9 @@ def main():
             current_quality_failures_count
         ),
 
-        # Keep this visible for diagnostics,
-        # but DO NOT use it directly as the
-        # current RED condition.
+        # Keep historical failures visible for diagnostics.
+        #
+        # They DO NOT determine the current health status.
         "historical_quality_failures": (
             int(
                 metrics.get(
@@ -393,7 +411,8 @@ def main():
             result,
             indent=2,
             ensure_ascii=False
-        )
+        ),
+        encoding="utf-8"
     )
 
     # =====================================================
@@ -411,7 +430,9 @@ def main():
     # =====================================================
     # CI SAFETY
     #
-    # RED still fails the workflow.
+    # Only genuine system-wide RED conditions fail CI.
+    #
+    # Individual quality failures do NOT fail CI.
     # =====================================================
 
     if status == "RED":
