@@ -12,7 +12,7 @@ from src.collector import collect
 from src.quality import quality_check
 from src.priority import priority
 
-ROOT=Path(__file__).resolve().parent
+ROOT=Path(__file__).resolve().parent.parent
 CONFIG=json.loads((ROOT/"config.json").read_text())
 DB=ROOT/CONFIG["database"];QUEUE=ROOT/CONFIG["queue_file"]
 
