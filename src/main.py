@@ -15,15 +15,21 @@ from src.collector import collect
 from src.quality import quality_check
 from src.priority import priority
 
+
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = json.loads((ROOT / "config.json").read_text())
+
 DB = ROOT / CONFIG["database"]
 QUEUE = ROOT / CONFIG["queue_file"]
 SOURCE_HEALTH = ROOT / "data" / "source_health.json"
 
 
 def clean(t):
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", t or "")).strip()
+    return re.sub(
+        r"\s+",
+        " ",
+        re.sub(r"<[^>]+>", " ", t or "")
+    ).strip()
 
 
 def sid(u, t):
@@ -34,23 +40,27 @@ def sid(u, t):
 
 def db():
     DB.parent.mkdir(parents=True, exist_ok=True)
+
     c = sqlite3.connect(DB)
+
     c.execute("""
-        CREATE TABLE IF NOT EXISTS stories(
-            id TEXT PRIMARY KEY,
-            title TEXT,
-            url TEXT,
-            source TEXT,
-            category TEXT,
-            summary TEXT,
-            score INTEGER,
-            confidence TEXT,
-            event_id TEXT,
-            event_status TEXT,
-            first_seen TEXT
-        )
+    CREATE TABLE IF NOT EXISTS stories(
+        id TEXT PRIMARY KEY,
+        title TEXT,
+        url TEXT,
+        source TEXT,
+        category TEXT,
+        summary TEXT,
+        score INTEGER,
+        confidence TEXT,
+        event_id TEXT,
+        event_status TEXT,
+        first_seen TEXT
+    )
     """)
+
     init_events(c)
+
     return c
 
 
@@ -62,11 +72,17 @@ def fetch():
         max_age_hours=48,
     )
 
-    SOURCE_HEALTH.parent.mkdir(parents=True, exist_ok=True)
+    SOURCE_HEALTH.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
     SOURCE_HEALTH.write_text(
         json.dumps(
             {
-                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "generated_at": datetime.now(
+                    timezone.utc
+                ).isoformat(),
                 "max_age_hours": 48,
                 "sources": health,
             },
@@ -76,6 +92,7 @@ def fetch():
     )
 
     out = []
+
     for item in raw:
         t = item["title"]
         u = item["url"]
@@ -90,84 +107,213 @@ def fetch():
             "primary_source": item["primary_source"],
             "tier": item["tier"],
             "region": item.get("region"),
-            "discovery": item.get("discovery", False),
+            "discovery": item.get(
+                "discovery",
+                False
+            ),
             "summary": s,
-            "published_at": item.get("published_at"),
+            "published_at": item.get(
+                "published_at"
+            ),
         })
+
     return out
 
 
 def translate_candidate(x):
-    result = translate_to_english(x["title"] + "\n\n" + x["summary"])
+    result = translate_to_english(
+        x["title"] + "\n\n" + x["summary"]
+    )
+
     parts = result["text"].split("\n", 1)
+
     x["title"] = clean(parts[0])
-    x["summary"] = clean(parts[1] if len(parts) > 1 else "")
-    x["translated_from"] = result.get("detected_language")
-    x["translation_endpoint"] = result.get("endpoint")
-    x["language_status"] = "TRANSLATED_TO_ENGLISH"
+
+    x["summary"] = clean(
+        parts[1] if len(parts) > 1 else ""
+    )
+
+    x["translated_from"] = result.get(
+        "detected_language"
+    )
+
+    x["translation_endpoint"] = result.get(
+        "endpoint"
+    )
+
+    x["language_status"] = (
+        "TRANSLATED_TO_ENGLISH"
+    )
+
     return x
 
 
 def main():
     c = db()
-    now = datetime.now(timezone.utc).isoformat()
+
+    now = datetime.now(
+        timezone.utc
+    ).isoformat()
+
     items = fetch()
+
     q = []
     held = []
 
+    # ---------------------------------------------------------
+    # Per-run statistics
+    #
+    # These describe THIS run only.
+    # They are different from metrics.py's historical
+    # database totals.
+    # ---------------------------------------------------------
+    run_stats = {
+        "fetched": len(items),
+        "already_seen": 0,
+        "new_candidates": 0,
+        "duplicates": 0,
+        "below_score": 0,
+        "discovery_held": 0,
+        "low_confidence_rejected": 0,
+        "quality_failed": 0,
+        "translation_held": 0,
+        "queued_before_limit": 0,
+    }
+
     for x in items:
+
+        # -----------------------------------------------------
+        # Skip stories already stored in the database.
+        # -----------------------------------------------------
         if c.execute(
             "SELECT 1 FROM stories WHERE id=?",
             (x["id"],)
         ).fetchone():
+
+            run_stats["already_seen"] += 1
             continue
 
+        run_stats["new_candidates"] += 1
+
+        # -----------------------------------------------------
+        # Language
+        # -----------------------------------------------------
         x["language_status"] = check_item(x)
-        x.update(classify(
-            x["title"],
-            x["summary"],
-            x["source_category"],
-            x
-        ))
-        x.update(verify(x, items))
-        x.update(priority(x))
 
-        if CONFIG.get("english_only", True) and x["language_status"] != "ENGLISH":
-            if (
-                not CONFIG.get("translate_non_english", True)
-                or x["score"] < CONFIG.get("translation_min_score", 55)
-            ):
-                x["hold_reason"] = "Translation required"
-                held.append(x)
-                continue
-
-            try:
-                x = translate_candidate(x)
-            except TranslationError as exc:
-                x["hold_reason"] = "Translation unavailable"
-                x["translation_error"] = str(exc)
-                held.append(x)
-                continue
-
-            x.update(classify(
+        # -----------------------------------------------------
+        # Classification
+        # -----------------------------------------------------
+        x.update(
+            classify(
                 x["title"],
                 x["summary"],
                 x["source_category"],
                 x
-            ))
-            x.update(priority(x))
+            )
+        )
 
+        # -----------------------------------------------------
+        # Verification
+        # -----------------------------------------------------
+        x.update(
+            verify(
+                x,
+                items
+            )
+        )
+
+        # -----------------------------------------------------
+        # Priority
+        # -----------------------------------------------------
+        x.update(
+            priority(x)
+        )
+
+        # -----------------------------------------------------
+        # Translation
+        # -----------------------------------------------------
+        if (
+            CONFIG.get(
+                "english_only",
+                True
+            )
+            and x["language_status"] != "ENGLISH"
+        ):
+
+            if (
+                not CONFIG.get(
+                    "translate_non_english",
+                    True
+                )
+                or x["score"]
+                < CONFIG.get(
+                    "translation_min_score",
+                    55
+                )
+            ):
+                x["hold_reason"] = (
+                    "Translation required"
+                )
+
+                held.append(x)
+
+                run_stats[
+                    "translation_held"
+                ] += 1
+
+                continue
+
+            try:
+                x = translate_candidate(x)
+
+            except TranslationError as exc:
+                x["hold_reason"] = (
+                    "Translation unavailable"
+                )
+
+                x["translation_error"] = str(exc)
+
+                held.append(x)
+
+                run_stats[
+                    "translation_held"
+                ] += 1
+
+                continue
+
+            # Re-classify after translation.
+            x.update(
+                classify(
+                    x["title"],
+                    x["summary"],
+                    x["source_category"],
+                    x
+                )
+            )
+
+            x.update(
+                priority(x)
+            )
+
+        # -----------------------------------------------------
+        # Event memory
+        # -----------------------------------------------------
         status, eid, _ = decide(
             c,
             x,
             CONFIG["event_memory_hours"],
             CONFIG["major_event_memory_hours"]
         )
+
         x["event_status"] = status
         x["event_id"] = eid
 
+        # -----------------------------------------------------
+        # Store story
+        # -----------------------------------------------------
         c.execute(
-            "INSERT INTO stories VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO stories VALUES "
+            "(?,?,?,?,?,?,?,?,?,?,?)",
             (
                 x["id"],
                 x["title"],
@@ -183,9 +329,19 @@ def main():
             )
         )
 
+        # -----------------------------------------------------
+        # Duplicate
+        # -----------------------------------------------------
         if status == "DUPLICATE":
+            run_stats[
+                "duplicates"
+            ] += 1
+
             continue
 
+        # -----------------------------------------------------
+        # Minimum score
+        # -----------------------------------------------------
         min_score = (
             CONFIG["discovery_min_score"]
             if is_discovery(x)
@@ -193,46 +349,137 @@ def main():
         )
 
         if x["score"] < min_score:
+            run_stats[
+                "below_score"
+            ] += 1
+
             continue
 
+        # -----------------------------------------------------
+        # Discovery verification
+        # -----------------------------------------------------
         if (
             is_discovery(x)
-            and x.get("strong_corroboration", 0) < 1
-            and not x.get("primary_source")
+            and x.get(
+                "strong_corroboration",
+                0
+            ) < 1
+            and not x.get(
+                "primary_source"
+            )
         ):
-            x["hold_reason"] = "Discovery lead awaiting independent confirmation"
+            x["hold_reason"] = (
+                "Discovery lead awaiting "
+                "independent confirmation"
+            )
+
             held.append(x)
+
+            run_stats[
+                "discovery_held"
+            ] += 1
+
             continue
 
-        if x["confidence"] == "low" and x["tier"] >= 3:
+        # -----------------------------------------------------
+        # Low-confidence rejection
+        # -----------------------------------------------------
+        if (
+            x["confidence"] == "low"
+            and x["tier"] >= 3
+        ):
+            run_stats[
+                "low_confidence_rejected"
+            ] += 1
+
             continue
 
-        x.update(format_story(x, CONFIG["breaking_min_score"]))
-        x.update(quality_check(x))
+        # -----------------------------------------------------
+        # Formatting
+        # -----------------------------------------------------
+        x.update(
+            format_story(
+                x,
+                CONFIG["breaking_min_score"]
+            )
+        )
+
+        # -----------------------------------------------------
+        # Quality
+        # -----------------------------------------------------
+        x.update(
+            quality_check(x)
+        )
 
         if not x["quality_pass"]:
-            x["hold_reason"] = "Quality check failed"
+            x["hold_reason"] = (
+                "Quality check failed"
+            )
+
             held.append(x)
+
+            run_stats[
+                "quality_failed"
+            ] += 1
+
             continue
 
+        # -----------------------------------------------------
+        # Queue
+        # -----------------------------------------------------
         q.append(x)
-        mark_queued(c, eid)
 
+        mark_queued(
+            c,
+            eid
+        )
+
+        run_stats[
+            "queued_before_limit"
+        ] += 1
+
+    # ---------------------------------------------------------
+    # Commit database changes
+    # ---------------------------------------------------------
     c.commit()
     c.close()
 
+    # ---------------------------------------------------------
+    # Sort queue by priority
+    # ---------------------------------------------------------
     q.sort(
         key=lambda x: (
-            x.get("priority_level") == "IMMEDIATE",
-            x.get("priority_score", 0),
+            x.get(
+                "priority_level"
+            ) == "IMMEDIATE",
+
+            x.get(
+                "priority_score",
+                0
+            ),
+
             x["event_status"] == "UPDATE",
+
             x["confidence"] == "high",
         ),
         reverse=True,
     )
-    q = q[:CONFIG["max_stories_per_run"]]
 
-    QUEUE.parent.mkdir(parents=True, exist_ok=True)
+    # ---------------------------------------------------------
+    # Apply maximum stories per run
+    # ---------------------------------------------------------
+    q = q[
+        :CONFIG["max_stories_per_run"]
+    ]
+
+    # ---------------------------------------------------------
+    # Write queue
+    # ---------------------------------------------------------
+    QUEUE.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
     QUEUE.write_text(
         json.dumps(
             {
@@ -247,15 +494,49 @@ def main():
         )
     )
 
+    # ---------------------------------------------------------
+    # Print queued stories
+    # ---------------------------------------------------------
     for x in q:
         print(
-            f"[{x['priority_level']} | {x['event_status']} | "
-            f"{x['format']} | {x.get('region')} | "
-            f"{x['priority_score']}] {x['title']}"
+            f"[{x['priority_level']} | "
+            f"{x['event_status']} | "
+            f"{x['format']} | "
+            f"{x.get('region')} | "
+            f"{x['priority_score']}] "
+            f"{x['title']}"
         )
-    print("Collected recent stories:", len(items))
-    print("Queued:", len(q))
-    print("Held:", len(held))
+
+    # ---------------------------------------------------------
+    # Basic run results
+    # ---------------------------------------------------------
+    print(
+        "Collected recent stories:",
+        len(items)
+    )
+
+    print(
+        "Queued:",
+        len(q)
+    )
+
+    print(
+        "Held:",
+        len(held)
+    )
+
+    # ---------------------------------------------------------
+    # Per-run diagnostics
+    # ---------------------------------------------------------
+    print("\nRUN STATS")
+
+    print(
+        json.dumps(
+            run_stats,
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
 
 
 if __name__ == "__main__":
