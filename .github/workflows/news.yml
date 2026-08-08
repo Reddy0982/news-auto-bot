@@ -74,6 +74,7 @@ jobs:
         run: python -m src.review
 
       - name: Upload news output
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: news-output
@@ -82,6 +83,7 @@ jobs:
             data/dashboard.html
             data/metrics.json
             data/health.json
+            data/source_health.json
           retention-days: 1
 
       - name: Persist event memory
