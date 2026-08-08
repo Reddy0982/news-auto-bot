@@ -34,11 +34,20 @@ def quality_check(item):
                 f"single post exceeds {POST_LIMIT} characters"
             )
 
-        # We no longer require 3+ sentences.
-        # A short story may correctly contain only 1 or 2
-        # complete sentences.
-        if post and sentence_count(post) < 1:
-            errors.append("single post has no complete sentence")
+        # Normal single posts should contain
+        # 3 to 4 useful sentences.
+        if post:
+            count = sentence_count(post)
+
+            if count < 3:
+                errors.append(
+                    "single post has fewer than 3 sentences"
+                )
+
+            if count > 4:
+                errors.append(
+                    "single post has more than 4 sentences"
+                )
 
         if post and not has_source(post):
             errors.append("single post missing source")
@@ -56,7 +65,9 @@ def quality_check(item):
             post = (post or "").strip()
 
             if not post:
-                errors.append(f"thread post {i} is empty")
+                errors.append(
+                    f"thread post {i} is empty"
+                )
                 continue
 
             if len(post) > POST_LIMIT:
@@ -83,7 +94,7 @@ def quality_check(item):
     ):
         errors.append("invalid source URL")
 
-    # Low-confidence stories can be held/warned,
+    # Low-confidence stories can be warned about,
     # but must never claim confirmation.
     if item.get("confidence") == "low":
         warnings.append("low-confidence story")
@@ -92,6 +103,7 @@ def quality_check(item):
 
     if fmt == "single":
         text_to_check = item.get("post", "")
+
     elif fmt == "thread":
         text_to_check = " ".join(
             item.get("thread", [])
