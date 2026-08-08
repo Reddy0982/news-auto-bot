@@ -1,3 +1,5 @@
+import re
+
 from src.formatter import format_story
 from src.quality import quality_check
 from src.priority import priority
@@ -59,10 +61,9 @@ def test_urgent():
 
 def test_no_confirmed_low_confidence():
     """
-    Low-confidence stories must not use confirmed wording.
-
-    The post intentionally contains three complete sentences
-    so it satisfies the stricter production quality gate.
+    Low-confidence stories may use the label
+    UNCONFIRMED, but must never claim that something
+    is confirmed.
     """
 
     item = {
@@ -84,9 +85,14 @@ def test_no_confirmed_low_confidence():
 
     assert r["quality_pass"], r
 
-    # Explicitly verify that the low-confidence post
-    # does not claim confirmation.
-    assert "confirmed" not in item["post"].lower()
+    # UNCONFIRMED is allowed.
+    assert "UNCONFIRMED" in item["post"]
+
+    # But the standalone word "confirmed" is not allowed.
+    assert not re.search(
+        r"\bconfirmed\b",
+        item["post"].lower()
+    )
 
 
 def main():
