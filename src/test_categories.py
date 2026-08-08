@@ -94,3 +94,33 @@ def test_ebola_story_is_health_not_region():
     )
 
     assert result["category"] == "health", result
+def test_drone_wildfire_story():
+    item = {
+        "primary_source": False,
+        "tier": 2,
+    }
+
+    result = classify(
+        "How Turkey uses drones to tackle fires",
+        "Emergency services are using drones to detect wildfires at an earlier stage.",
+        "world",
+        item,
+    )
+
+    assert result["category"] == "technology", result
+
+
+def test_crocodile_climate_story():
+    item = {
+        "primary_source": False,
+        "tier": 2,
+    }
+
+    result = classify(
+        "Crocodile attacks increase in Kenya",
+        "Extreme rainfall linked to climate change is causing dangerous wildlife encounters.",
+        "world",
+        item,
+    )
+
+    assert result["category"] == "environment", result
