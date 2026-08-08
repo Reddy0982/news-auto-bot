@@ -137,13 +137,6 @@
       "tier": 1
     },
     {
-      "name": "USGS All Earthquakes",
-      "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.atom",
-      "category": "disaster",
-      "primary": true,
-      "tier": 1
-    },
-    {
       "name": "NASA News",
       "url": "https://www.nasa.gov/feed/",
       "category": "space",
