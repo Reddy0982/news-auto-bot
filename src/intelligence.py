@@ -15,7 +15,8 @@ CATEGORY_TERMS = {
         "bank", "stocks", "stock market", "bond", "inflation",
         "interest rate", "central bank", "economy", "economic",
         "tariff", "trade", "earnings", "revenue", "ipo",
-        "debt", "default"
+        "debt", "default", "economic collapse", "economic crisis",
+        "energy crisis", "financial crisis", "sanctions"
     },
 
     "politics": {
@@ -26,8 +27,9 @@ CATEGORY_TERMS = {
 
     "disaster": {
         "earthquake", "tsunami", "hurricane", "cyclone",
-        "tornado", "flood", "wildfire", "volcano", "eruption",
-        "landslide", "evacuation", "disaster"
+        "tornado", "flood", "wildfire", "wildfires",
+        "volcano", "eruption", "landslide", "evacuation",
+        "disaster"
     },
 
     "conflict": {
@@ -38,12 +40,13 @@ CATEGORY_TERMS = {
     "technology": {
         "technology", "ai", "artificial intelligence", "chip",
         "semiconductor", "software", "cybersecurity",
-        "cyberattack", "data breach", "robot"
+        "cyberattack", "data breach", "robot",
+        "drone", "drones"
     },
 
     "science": {
-        "science", "research", "study", "scientist", "astronomy",
-        "biology", "physics", "chemistry"
+        "science", "research", "study", "scientist",
+        "astronomy", "biology", "physics", "chemistry"
     },
 
     "space": {
@@ -55,6 +58,13 @@ CATEGORY_TERMS = {
     "health": {
         "health", "disease", "virus", "outbreak", "hospital",
         "who", "vaccine", "pandemic"
+    },
+
+    "environment": {
+        "environment", "climate", "climate change", "pollution",
+        "emissions", "deforestation", "biodiversity",
+        "conservation", "wildlife", "crocodile", "crocodiles",
+        "extreme rainfall", "rainfall"
     },
 
     "industry": {
