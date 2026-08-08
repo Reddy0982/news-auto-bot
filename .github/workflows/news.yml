@@ -1,0 +1,110 @@
+\
+name: World News Bot — Fast Collector
+
+on:
+  workflow_dispatch:
+  schedule:
+    # GitHub's shortest supported schedule interval is 5 minutes.
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: world-news-state
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore persistent state
+        shell: bash
+        run: |
+          set -e
+          mkdir -p data
+          if git ls-remote --exit-code --heads origin state >/dev/null 2>&1; then
+            git fetch origin state
+            git show origin/state:data/news.db > data/news.db || true
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run regression tests
+        run: python -m src.regression_test
+
+      - name: Run quality smoke test
+        run: python -m src.test_quality
+
+      - name: Collect, verify and prioritize
+        run: python -m src.main
+
+      - name: Show status
+        run: python -m src.status
+
+      - name: X dry run
+        run: python -m src.dry_run
+
+      - name: Generate review dashboard
+        run: python -m src.run_dashboard
+
+      - name: Generate metrics
+        run: python -m src.metrics
+
+      - name: Safety health gate
+        run: python -m src.health_gate
+
+      - name: Production controller
+        run: python -m src.production_controller
+
+      - name: Human review report
+        run: python -m src.review
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: news-output
+          path: |
+            data/queue.json
+            data/dashboard.html
+            data/metrics.json
+            data/health.json
+          retention-days: 1
+
+      - name: Persist event memory
+        shell: bash
+        run: |
+          set -e
+          git config user.name "world-news-bot"
+          git config user.email "world-news-bot@users.noreply.github.com"
+          git fetch origin state || true
+
+          if git show-ref --verify --quiet refs/remotes/origin/state; then
+            git worktree add /tmp/news-state origin/state
+          else
+            mkdir -p /tmp/news-state
+            git -C /tmp/news-state init
+            git -C /tmp/news-state checkout --orphan state
+            git -C /tmp/news-state remote add origin "${{ github.server_url }}/${{ github.repository }}.git"
+          fi
+
+          mkdir -p /tmp/news-state/data
+          cp data/news.db /tmp/news-state/data/news.db
+          cd /tmp/news-state
+          git add data/news.db
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Update news event memory"
+          git push origin HEAD:state
