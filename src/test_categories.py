@@ -124,3 +124,17 @@ def test_crocodile_climate_story():
     )
 
     assert result["category"] == "environment", result
+def test_government_court_story():
+    item = {
+        "primary_source": False,
+        "tier": 2,
+    }
+
+    result = classify(
+        "Trump vows appeal over ballroom halt",
+        "The US President said he would appeal after a federal appeals court halted the White House ballroom project.",
+        "world",
+        item,
+    )
+
+    assert result["category"] == "politics", result
