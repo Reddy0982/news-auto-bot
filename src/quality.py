@@ -27,6 +27,6 @@ def quality_check(item):
         errors.append("invalid source URL")
     if item.get("confidence")=="low":
         warnings.append("low-confidence story")
-    if "confirmed" in (item.get("post","").lower()) and item.get("confidence")=="low":
+    if re.search(r"\bconfirmed\b", item.get("post","").lower()) and item.get("confidence")=="low":
         errors.append("low-confidence story uses confirmed wording")
     return {"quality_pass":not errors,"quality_errors":errors,"quality_warnings":warnings}
