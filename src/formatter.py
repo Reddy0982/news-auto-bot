@@ -117,7 +117,9 @@ def usable_sentences(text):
     than being cut.
     """
 
-    sentences = split_sentences(text)
+    sentences = split_sentences(
+        text
+    )
 
     return [
         sentence
@@ -343,7 +345,7 @@ def compact_headline(
 
 
 # =========================================================
-# SINGLE POST VALIDATION
+# SINGLE POST
 # =========================================================
 
 def build_single_post(
@@ -353,20 +355,26 @@ def build_single_post(
     """
     Build one clean X post.
 
-    Preferred format:
+    Required public structure:
 
         Headline.
         Context.
         Source.
 
-    Or:
+    Preferred:
 
         Headline.
         Context.
         Additional context.
         Source.
 
-    Internal verification information is never published.
+    IMPORTANT:
+
+    If there is not enough useful source context to
+    produce at least 3 complete sentences, return ""
+    instead of creating a weak headline-only post.
+
+    We NEVER invent missing information.
     """
 
     lab = label(
@@ -413,9 +421,11 @@ def build_single_post(
     )
 
     # -----------------------------------------------------
-    # Preferred:
+    # BEST:
     #
-    # Headline + 2 context sentences + Source
+    # Headline + 2 context sentences + source
+    #
+    # 4 complete sentences.
     # -----------------------------------------------------
 
     if len(context_sentences) >= 2:
@@ -435,11 +445,11 @@ def build_single_post(
             return post
 
     # -----------------------------------------------------
-    # Fallback:
+    # SAFE FALLBACK:
     #
-    # Headline + 1 context sentence + Source
+    # Headline + 1 context sentence + source
     #
-    # This gives exactly 3 complete sentences.
+    # Exactly 3 complete sentences.
     # -----------------------------------------------------
 
     if len(context_sentences) >= 1:
@@ -458,46 +468,19 @@ def build_single_post(
             return post
 
     # -----------------------------------------------------
-    # Last safe fallback:
+    # IMPORTANT CHANGE
     #
-    # Headline + Source.
+    # DO NOT return:
     #
-    # NOTE:
-    # This may fail the quality gate because it has only
-    # two sentences. That is intentional: we would rather
-    # reject the story than manufacture content.
+    #     Headline + Source
+    #
+    # That creates only 2 sentences and will fail quality.
+    #
+    # Returning an empty post causes the quality gate to
+    # hold the story safely.
     # -----------------------------------------------------
 
-    candidate = [
-        headline,
-        source_sentence,
-    ]
-
-    post = " ".join(
-        candidate
-    )
-
-    if len(post) <= POST_LIMIT:
-        return post
-
-    # -----------------------------------------------------
-    # Extremely long headline.
-    #
-    # Preserve complete words.
-    # -----------------------------------------------------
-
-    compact = compact_headline(
-        headline,
-        source_sentence
-    )
-
-    if compact:
-        return (
-            f"{compact} "
-            f"{source_sentence}"
-        )
-
-    return source_sentence
+    return ""
 
 
 # =========================================================
@@ -508,8 +491,6 @@ def choose_format(item):
     """
     Decide whether the story should be a single post
     or a thread.
-
-    IMPORTANT:
 
     Single post is the DEFAULT.
 
@@ -669,6 +650,9 @@ def build_thread(
 
     The source is placed on the final post whenever
     possible.
+
+    If there is insufficient useful context, return []
+    so the quality gate can safely hold the story.
     """
 
     lab = label(
@@ -701,6 +685,19 @@ def build_thread(
         return []
 
     # -----------------------------------------------------
+    # Context
+    # -----------------------------------------------------
+
+    context = choose_context_sentences(
+        summary,
+        5
+    )
+
+    # A thread without useful context is not useful.
+    if not context:
+        return []
+
+    # -----------------------------------------------------
     # First post: headline
     # -----------------------------------------------------
 
@@ -709,8 +706,11 @@ def build_thread(
         title
     )
 
+    if not first:
+        return []
+
     # -----------------------------------------------------
-    # If the headline is too long, compact it using
+    # If headline is too long, compact it using
     # complete words only.
     # -----------------------------------------------------
 
@@ -727,35 +727,36 @@ def build_thread(
             )
 
             if len(candidate) <= POST_LIMIT:
+
                 compact_words.append(
                     word
                 )
+
             else:
+
                 break
 
         first = " ".join(
             compact_words
         ).strip()
 
-    posts = []
+    if not first:
+        return []
 
-    if first:
-        posts.append(
-            first
-        )
+    posts = [
+        first
+    ]
 
     # -----------------------------------------------------
-    # Context
+    # Context posts
     # -----------------------------------------------------
-
-    context = choose_context_sentences(
-        summary,
-        5
-    )
 
     context_posts = pack_sentences_into_posts(
         context
     )
+
+    if not context_posts:
+        return []
 
     posts.extend(
         context_posts
@@ -768,15 +769,6 @@ def build_thread(
     source_sentence = make_source_sentence(
         source
     )
-
-    if not posts:
-
-        if len(source_sentence) <= POST_LIMIT:
-            posts.append(
-                source_sentence
-            )
-
-        return posts[:7]
 
     # Add source to final post if possible.
     candidate = (
@@ -791,9 +783,14 @@ def build_thread(
     else:
 
         if len(source_sentence) <= POST_LIMIT:
+
             posts.append(
                 source_sentence
             )
+
+        else:
+
+            return []
 
     # -----------------------------------------------------
     # Final safety validation.
@@ -819,6 +816,15 @@ def build_thread(
             post
         )
 
+    # A useful thread must contain at least:
+    #
+    # 1. headline
+    # 2. context
+    # 3. source
+    #
+    if len(final_posts) < 2:
+        return []
+
     return final_posts[:7]
 
 
@@ -832,6 +838,10 @@ def format_story(
 ):
     """
     Main formatter entry point.
+
+    A story with insufficient content returns an empty
+    post/thread. The quality gate then holds it rather than
+    allowing a weak public post.
     """
 
     chosen_format = choose_format(
