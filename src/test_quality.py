@@ -5,8 +5,9 @@ from src.formatter import format_story
 item = {
     "title": "Major earthquake strikes region",
     "summary": (
-        "Officials are assessing the situation and "
-        "emergency teams are responding."
+        "Officials are assessing the situation. "
+        "Emergency teams are responding to the affected area. "
+        "Authorities are monitoring conditions and preparing additional support."
     ),
     "source": "Test Source",
     "url": "https://example.com/story",
@@ -32,10 +33,22 @@ if item["format"] == "single":
     assert len(item["post"]) <= 270
     assert item["post"].strip()
     assert "Source:" in item["post"]
+
+    sentence_total = len(
+        [
+            part
+            for part in item["post"].split(". ")
+            if part.strip()
+        ]
+    )
+
+    assert 3 <= sentence_total <= 4
+
 else:
     assert item["thread"]
+
     for post in item["thread"]:
-        assert len(post) <= 270
         assert post.strip()
+        assert len(post) <= 270
 
 print("QUALITY TEST PASSED")
