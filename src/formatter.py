@@ -1,50 +1,69 @@
 import re
 
-def clean(text,limit=230):
-    text=re.sub(r"\s+"," ",text or "").strip()
-    return text if len(text)<=limit else text[:limit].rsplit(" ",1)[0]+"…"
+def clean(text, limit=180):
+    text = re.sub(r"\s+", " ", text or "").strip()
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + "…"
 
-def fit(text,limit=280):
-    text=re.sub(r"\s+"," ",text or "").strip()
-    if len(text)<=limit:return text
-    parts=re.split(r"(?<=[.!?])\s+",text)
-    out=""
-    for p in parts:
-        candidate=(out+" "+p).strip()
-        if len(candidate)>limit:break
-        out=candidate
-    return out or text[:limit-1].rstrip()+"…"
+def fit_sentences(sentences, limit=280):
+    """Keep a compact 4-sentence post when possible, always staying <= 280 chars."""
+    sentences = [re.sub(r"\s+", " ", s or "").strip() for s in sentences if (s or "").strip()]
+    if not sentences:
+        return ""
+    # Reserve space for all four sentences. Shorten the summary first.
+    if len(sentences) >= 4:
+        prefix = " ".join(sentences[:1])
+        tail = " ".join(sentences[2:4])
+        available = limit - len(prefix) - len(tail) - 2
+        if available > 30:
+            sentences[1] = clean(sentences[1], available)
+    text = " ".join(sentences[:4])
+    if len(text) <= limit:
+        return text
+    # Last-resort compacting: preserve title, verification and source.
+    if len(sentences) >= 4:
+        available = limit - len(sentences[0]) - len(sentences[2]) - len(sentences[3]) - 3
+        sentences[1] = clean(sentences[1], max(20, available))
+        text = " ".join(sentences[:4])
+    return text if len(text) <= limit else text[:limit-1].rstrip() + "…"
 
-def label(item,breaking_min_score=75):
-    if item.get("event_status")=="UPDATE": return "🔴 UPDATE"
-    if item.get("confidence")=="high" and item.get("score",0)>=breaking_min_score: return "🚨 BREAKING"
-    if item.get("confidence")=="low": return "⚠️ UNCONFIRMED"
+def label(item, breaking_min_score=75):
+    if item.get("event_status") == "UPDATE":
+        return "🔴 UPDATE"
+    if item.get("confidence") == "high" and item.get("score", 0) >= breaking_min_score:
+        return "🚨 BREAKING"
+    if item.get("confidence") == "low":
+        return "⚠️ UNCONFIRMED"
     return "📰 DEVELOPING"
 
 def choose_format(item):
-    if item.get("event_status")=="UPDATE" and item.get("score",0)>=85 and len(item.get("summary",""))>350:return "thread"
-    if item.get("score",0)>=92 and item.get("strong_corroboration",0)>=2 and len(item.get("summary",""))>380:return "thread"
+    if item.get("event_status") == "UPDATE" and item.get("score", 0) >= 85 and len(item.get("summary", "")) > 350:
+        return "thread"
+    if item.get("score", 0) >= 92 and item.get("strong_corroboration", 0) >= 2 and len(item.get("summary", "")) > 380:
+        return "thread"
     return "single"
 
-def format_story(item,breaking_min_score=75):
-    lab=label(item,breaking_min_score)
-    s=clean(item.get("summary",""))
-    if item.get("primary_source"):
-        verification="An authoritative source is reporting this development."
-    elif item.get("strong_corroboration",0)>=2:
-        verification=f"Independent reporting from {item['strong_corroboration']} strong sources corroborates the development."
-    elif item.get("corroborating_sources",0)>=1:
-        verification="At least one independent source is also reporting the development."
-    else:
-        verification="The report is not yet independently corroborated."
+def format_story(item, breaking_min_score=75):
+    lab = label(item, breaking_min_score)
+    summary = clean(item.get("summary", ""), 150)
 
-    sentences=[
+    if item.get("primary_source"):
+        verification = "An authoritative source is reporting this."
+    elif item.get("strong_corroboration", 0) >= 2:
+        verification = f"{item['strong_corroboration']} independent strong sources corroborate it."
+    elif item.get("corroborating_sources", 0) >= 1:
+        verification = "At least one independent source is also reporting it."
+    else:
+        verification = "Independent confirmation is not yet available."
+
+    source = f"Source: {item.get('source', 'Unknown')} — {item.get('url', '')}"
+    sentences = [
         f"{lab}: {item['title'].rstrip('.')}.",
-        s if s.endswith((".","!","?")) else s+".",
+        summary if summary.endswith((".", "!", "?")) else summary + ".",
         verification,
-        f"Source: {item['source']} — {item['url']}"
+        source,
     ]
-    sentences=[x for x in sentences if x!="."]
-    if choose_format(item)=="single":
-        return {"format":"single","post":fit(" ".join(sentences))}
-    return {"format":"thread","thread":[fit(x) for x in sentences[:5]]}
+
+    if choose_format(item) == "single":
+        return {"format": "single", "post": fit_sentences(sentences)}
+
+    return {"format": "thread", "thread":[s[:280].rstrip() for s in sentences[:5]]}
