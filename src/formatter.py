@@ -1,30 +1,45 @@
 import re
 
-def clean(text, limit=180):
-    text = re.sub(r"\s+", " ", text or "").strip()
-    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + "…"
 
-def fit_sentences(sentences, limit=280):
-    """Keep a compact 4-sentence post when possible, always staying <= 280 chars."""
-    sentences = [re.sub(r"\s+", " ", s or "").strip() for s in sentences if (s or "").strip()]
-    if not sentences:
+POST_LIMIT = 270
+
+
+def clean(text):
+    """Normalize whitespace without cutting the text."""
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def clean_sentence(text):
+    """Clean a sentence and make sure it ends naturally."""
+    text = clean(text)
+
+    if not text:
         return ""
-    # Reserve space for all four sentences. Shorten the summary first.
-    if len(sentences) >= 4:
-        prefix = " ".join(sentences[:1])
-        tail = " ".join(sentences[2:4])
-        available = limit - len(prefix) - len(tail) - 2
-        if available > 30:
-            sentences[1] = clean(sentences[1], available)
-    text = " ".join(sentences[:4])
-    if len(text) <= limit:
+
+    if text.endswith((".", "!", "?")):
         return text
-    # Last-resort compacting: preserve title, verification and source.
-    if len(sentences) >= 4:
-        available = limit - len(sentences[0]) - len(sentences[2]) - len(sentences[3]) - 3
-        sentences[1] = clean(sentences[1], max(20, available))
-        text = " ".join(sentences[:4])
-    return text if len(text) <= limit else text[:limit-1].rstrip() + "…"
+
+    return text + "."
+
+
+def split_sentences(text):
+    """
+    Split text into readable sentences.
+    This is intentionally simple and safe for RSS summaries.
+    """
+    text = clean(text)
+
+    if not text:
+        return []
+
+    parts = re.split(r"(?<=[.!?])\s+", text)
+
+    return [
+        clean_sentence(part)
+        for part in parts
+        if clean(part)
+    ]
+
 
 def label(item, breaking_min_score=75):
     score = item.get("score", 0)
@@ -56,7 +71,6 @@ def label(item, breaking_min_score=75):
     }
 
     urgent = bool(item.get("urgency_terms"))
-
     verified = primary or corroboration >= 2
 
     if (
@@ -68,60 +82,263 @@ def label(item, breaking_min_score=75):
     ):
         return "🚨 BREAKING"
 
-    # Important but not breaking.
     if score >= 55:
         return "📰 NEWS"
 
     return "📰 DEVELOPING"
 
-def choose_format(item):
-    if item.get("event_status") == "UPDATE" and item.get("score", 0) >= 85 and len(item.get("summary", "")) > 350:
-        return "thread"
-    if item.get("score", 0) >= 92 and item.get("strong_corroboration", 0) >= 2 and len(item.get("summary", "")) > 380:
-        return "thread"
-    return "single"
 
-def format_story(item, breaking_min_score=75):
+def verification_sentence(item):
+    """
+    Keep verification factual and short.
+    Never invent confirmation.
+    """
+    primary = item.get("primary_source", False)
+    strong = item.get("strong_corroboration", 0)
+    corroborating = item.get("corroborating_sources", 0)
+
+    if strong >= 2:
+        return f"Confirmed by {strong} independent sources."
+
+    if strong == 1:
+        return "Also reported by an independent source."
+
+    if corroborating >= 1:
+        return "Also reported independently."
+
+    if primary:
+        return "Reported by an authoritative source."
+
+    return ""
+
+
+def choose_context_sentences(summary, max_sentences=2):
+    """
+    Select the most useful complete sentences from the source summary.
+
+    We never cut a sentence in half.
+    """
+    sentences = split_sentences(summary)
+
+    if not sentences:
+        return []
+
+    return sentences[:max_sentences]
+
+
+def build_single_post(item, breaking_min_score=75):
+    """
+    Build one clean X post.
+
+    The function prefers fewer complete sentences over
+    cutting a sentence with an ellipsis.
+    """
     lab = label(item, breaking_min_score)
 
-    title = clean(item.get("title", ""), 120)
-    summary = clean(item.get("summary", ""), 220)
+    title = clean(item.get("title", ""))
+    summary = clean(item.get("summary", ""))
+    source = clean(item.get("source", "Unknown"))
 
-    if item.get("primary_source"):
-        verification = "This is reported by an authoritative source."
-    elif item.get("strong_corroboration", 0) >= 2:
-        verification = (
-            f"{item['strong_corroboration']} independent sources "
-            "corroborate the report."
+    if not title:
+        return ""
+
+    headline = f"{lab}: {title}"
+
+    # Keep the headline intact whenever possible.
+    # If an unusually long RSS headline exceeds the limit,
+    # use it as-is rather than cutting it in the middle.
+    parts = [headline]
+
+    context_sentences = choose_context_sentences(summary, 2)
+    verification = verification_sentence(item)
+
+    # Try:
+    # headline
+    # blank line
+    # context
+    # blank line
+    # verification
+    # source
+    #
+    # Then progressively remove less important material
+    # until the post fits naturally.
+
+    candidates = []
+
+    if len(context_sentences) >= 2:
+        candidates.append(
+            [
+                headline,
+                " ".join(context_sentences[:2]),
+                verification,
+                f"Source: {source}",
+            ]
         )
-    elif item.get("corroborating_sources", 0) >= 1:
-        verification = (
-            "The report is also being covered by an independent source."
+
+    if len(context_sentences) >= 1:
+        candidates.append(
+            [
+                headline,
+                context_sentences[0],
+                verification,
+                f"Source: {source}",
+            ]
         )
+
+    candidates.append(
+        [
+            headline,
+            verification,
+            f"Source: {source}",
+        ]
+    )
+
+    candidates.append(
+        [
+            headline,
+            f"Source: {source}",
+        ]
+    )
+
+    for candidate in candidates:
+        candidate = [
+            clean(part)
+            for part in candidate
+            if clean(part)
+        ]
+
+        # One blank line between major sections.
+        post = "\n\n".join(candidate)
+
+        if len(post) <= POST_LIMIT:
+            return post
+
+    # Extremely long headline fallback.
+    #
+    # We still avoid cutting the headline in the middle.
+    # If the headline itself is too long, use a compact
+    # title made from complete words.
+    words = headline.split()
+
+    compact_words = []
+
+    for word in words:
+        test = " ".join(compact_words + [word])
+
+        if len(test) + len(f"\n\nSource: {source}") <= POST_LIMIT:
+            compact_words.append(word)
+        else:
+            break
+
+    compact_headline = " ".join(compact_words)
+
+    return f"{compact_headline}\n\nSource: {source}"
+
+
+def choose_format(item):
+    """
+    Use a thread only when the story genuinely contains
+    enough important information to justify one.
+    """
+    summary_length = len(item.get("summary", ""))
+    score = item.get("score", 0)
+    corroboration = item.get("strong_corroboration", 0)
+    status = item.get("event_status", "NEW")
+
+    if (
+        status == "UPDATE"
+        and score >= 85
+        and summary_length > 500
+    ):
+        return "thread"
+
+    if (
+        score >= 92
+        and corroboration >= 2
+        and summary_length > 500
+    ):
+        return "thread"
+
+    return "single"
+
+
+def build_thread(item, breaking_min_score=75):
+    """
+    Build a small thread from complete sentences.
+
+    Every post remains independently readable and <= POST_LIMIT.
+    """
+    lab = label(item, breaking_min_score)
+
+    title = clean(item.get("title", ""))
+    summary = clean(item.get("summary", ""))
+    source = clean(item.get("source", "Unknown"))
+
+    context = choose_context_sentences(summary, 5)
+
+    first = f"{lab}: {title}"
+
+    posts = [first]
+
+    current = ""
+
+    for sentence in context:
+        candidate = sentence if not current else f"{current} {sentence}"
+
+        if len(candidate) <= POST_LIMIT:
+            current = candidate
+        else:
+            if current:
+                posts.append(current)
+            current = sentence
+
+    if current:
+        posts.append(current)
+
+    verification = verification_sentence(item)
+
+    if verification:
+        if len(posts[-1]) + len(verification) + 1 <= POST_LIMIT:
+            posts[-1] = f"{posts[-1]} {verification}"
+        else:
+            posts.append(verification)
+
+    source_line = f"Source: {source}"
+
+    if len(posts[-1]) + len(source_line) + 1 <= POST_LIMIT:
+        posts[-1] = f"{posts[-1]} {source_line}"
     else:
-        verification = "Independent confirmation is not yet available."
+        posts.append(source_line)
 
-    source = item.get("source", "Unknown")
-
-    sentences = [
-        f"{lab}: {title}.",
-        summary if summary.endswith((".", "!", "?")) else summary + ".",
-        verification,
-        f"Source: {source}.",
+    # Guarantee the limit.
+    posts = [
+        post.strip()
+        for post in posts
+        if post.strip()
     ]
 
-    # Keep normal stories as a single post.
-    if choose_format(item) == "single":
+    return posts
+
+
+def format_story(item, breaking_min_score=75):
+    """
+    Main formatter entry point.
+    """
+    chosen_format = choose_format(item)
+
+    if chosen_format == "thread":
         return {
-            "format": "single",
-            "post": fit_sentences(sentences, 280)
+            "format": "thread",
+            "thread": build_thread(
+                item,
+                breaking_min_score
+            ),
         }
 
-    # Use a thread only when the story genuinely needs additional context.
     return {
-        "format": "thread",
-        "thread": [
-            sentence[:280].rstrip()
-            for sentence in sentences
-        ]
+        "format": "single",
+        "post": build_single_post(
+            item,
+            breaking_min_score
+        ),
     }
