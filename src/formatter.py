@@ -83,26 +83,45 @@ def choose_format(item):
 
 def format_story(item, breaking_min_score=75):
     lab = label(item, breaking_min_score)
-    summary = clean(item.get("summary", ""), 150)
+
+    title = clean(item.get("title", ""), 120)
+    summary = clean(item.get("summary", ""), 220)
 
     if item.get("primary_source"):
-        verification = "An authoritative source is reporting this."
+        verification = "This is reported by an authoritative source."
     elif item.get("strong_corroboration", 0) >= 2:
-        verification = f"{item['strong_corroboration']} independent strong sources corroborate it."
+        verification = (
+            f"{item['strong_corroboration']} independent sources "
+            "corroborate the report."
+        )
     elif item.get("corroborating_sources", 0) >= 1:
-        verification = "At least one independent source is also reporting it."
+        verification = (
+            "The report is also being covered by an independent source."
+        )
     else:
         verification = "Independent confirmation is not yet available."
 
-    source = f"Source: {item.get('source', 'Unknown')} — {item.get('url', '')}"
+    source = item.get("source", "Unknown")
+
     sentences = [
-        f"{lab}: {item['title'].rstrip('.')}.",
+        f"{lab}: {title}.",
         summary if summary.endswith((".", "!", "?")) else summary + ".",
         verification,
-        source,
+        f"Source: {source}.",
     ]
 
+    # Keep normal stories as a single post.
     if choose_format(item) == "single":
-        return {"format": "single", "post": fit_sentences(sentences)}
+        return {
+            "format": "single",
+            "post": fit_sentences(sentences, 280)
+        }
 
-    return {"format": "thread", "thread":[s[:280].rstrip() for s in sentences[:5]]}
+    # Use a thread only when the story genuinely needs additional context.
+    return {
+        "format": "thread",
+        "thread": [
+            sentence[:280].rstrip()
+            for sentence in sentences
+        ]
+    }
