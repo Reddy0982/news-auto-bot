@@ -17,7 +17,9 @@ from src.priority import priority
 
 
 ROOT = Path(__file__).resolve().parent.parent
-CONFIG = json.loads((ROOT / "config.json").read_text())
+CONFIG = json.loads(
+    (ROOT / "config.json").read_text()
+)
 
 DB = ROOT / CONFIG["database"]
 QUEUE = ROOT / CONFIG["queue_file"]
@@ -34,7 +36,11 @@ def clean(t):
 
 def sid(u, t):
     return hashlib.sha256(
-        (u.split("?")[0] + "|" + t.lower()).encode()
+        (
+            u.split("?")[0]
+            + "|"
+            + t.lower()
+        ).encode()
     ).hexdigest()
 
 
@@ -118,15 +124,12 @@ def fetch():
                 False
             ),
             "summary": s,
-
             "published_at": item.get(
                 "published_at"
             ),
-
             "updated_at": item.get(
                 "updated_at"
             ),
-
             "effective_at": item.get(
                 "effective_at"
             ),
@@ -182,15 +185,17 @@ def main():
     q = []
     held = []
 
-    # ---------------------------------------------------------
+    # Stories that fail quality are rejected and skipped.
+    # They are NOT placed into the held/publish pipeline.
+    quality_rejected = []
+
     # Diagnostic list for stories rejected by score.
-    # This does NOT change the scoring or queue logic.
-    # ---------------------------------------------------------
     below_score_stories = []
 
     # ---------------------------------------------------------
     # Per-run statistics
     # ---------------------------------------------------------
+
     run_stats = {
         "fetched": len(items),
         "already_seen": 0,
@@ -200,15 +205,21 @@ def main():
         "discovery_held": 0,
         "low_confidence_rejected": 0,
         "quality_failed": 0,
+        "quality_rejected": 0,
         "translation_held": 0,
         "queued_before_limit": 0,
     }
 
+    # ---------------------------------------------------------
+    # Process stories
+    # ---------------------------------------------------------
+
     for x in items:
 
         # -----------------------------------------------------
-        # Skip stories already stored in the database.
+        # Skip stories already stored in database.
         # -----------------------------------------------------
+
         if c.execute(
             "SELECT 1 FROM stories WHERE id=?",
             (x["id"],)
@@ -227,11 +238,13 @@ def main():
         # -----------------------------------------------------
         # Language
         # -----------------------------------------------------
+
         x["language_status"] = check_item(x)
 
         # -----------------------------------------------------
         # Classification
         # -----------------------------------------------------
+
         x.update(
             classify(
                 x["title"],
@@ -244,6 +257,7 @@ def main():
         # -----------------------------------------------------
         # Verification
         # -----------------------------------------------------
+
         x.update(
             verify(
                 x,
@@ -254,6 +268,7 @@ def main():
         # -----------------------------------------------------
         # Priority
         # -----------------------------------------------------
+
         x.update(
             priority(x)
         )
@@ -261,6 +276,7 @@ def main():
         # -----------------------------------------------------
         # Translation
         # -----------------------------------------------------
+
         if (
             CONFIG.get(
                 "english_only",
@@ -280,6 +296,7 @@ def main():
                     55
                 )
             ):
+
                 x["hold_reason"] = (
                     "Translation required"
                 )
@@ -296,6 +313,7 @@ def main():
                 x = translate_candidate(x)
 
             except TranslationError as exc:
+
                 x["hold_reason"] = (
                     "Translation unavailable"
                 )
@@ -313,6 +331,7 @@ def main():
                 continue
 
             # Re-classify after translation.
+
             x.update(
                 classify(
                     x["title"],
@@ -329,6 +348,7 @@ def main():
         # -----------------------------------------------------
         # Event memory
         # -----------------------------------------------------
+
         status, eid, _ = decide(
             c,
             x,
@@ -341,7 +361,14 @@ def main():
 
         # -----------------------------------------------------
         # Store story
+        #
+        # IMPORTANT:
+        # Store the story BEFORE quality checking.
+        #
+        # This means a rejected quality story is remembered
+        # and will not be treated as a brand-new story again.
         # -----------------------------------------------------
+
         c.execute(
             "INSERT INTO stories VALUES "
             "(?,?,?,?,?,?,?,?,?,?,?)",
@@ -363,6 +390,7 @@ def main():
         # -----------------------------------------------------
         # Duplicate
         # -----------------------------------------------------
+
         if status == "DUPLICATE":
 
             run_stats[
@@ -374,6 +402,7 @@ def main():
         # -----------------------------------------------------
         # Minimum score
         # -----------------------------------------------------
+
         min_score = (
             CONFIG["discovery_min_score"]
             if is_discovery(x)
@@ -386,8 +415,6 @@ def main():
                 "below_score"
             ] += 1
 
-            # Record the story so we can inspect
-            # why it was rejected.
             below_score_stories.append({
                 "title": x.get(
                     "title",
@@ -421,6 +448,7 @@ def main():
         # -----------------------------------------------------
         # Discovery verification
         # -----------------------------------------------------
+
         if (
             is_discovery(x)
             and x.get(
@@ -448,6 +476,7 @@ def main():
         # -----------------------------------------------------
         # Low-confidence rejection
         # -----------------------------------------------------
+
         if (
             x["confidence"] == "low"
             and x["tier"] >= 3
@@ -462,6 +491,7 @@ def main():
         # -----------------------------------------------------
         # Formatting
         # -----------------------------------------------------
+
         x.update(
             format_story(
                 x,
@@ -472,27 +502,64 @@ def main():
         # -----------------------------------------------------
         # Quality
         # -----------------------------------------------------
+
         x.update(
             quality_check(x)
         )
 
+        # -----------------------------------------------------
+        # QUALITY FAILURE
+        #
+        # IMPORTANT FIX:
+        #
+        # DO NOT put failed stories into "held".
+        #
+        # They are rejected and skipped.
+        # Good stories continue processing.
+        # -----------------------------------------------------
+
         if not x["quality_pass"]:
-
-            x["hold_reason"] = (
-                "Quality check failed"
-            )
-
-            held.append(x)
 
             run_stats[
                 "quality_failed"
             ] += 1
 
+            run_stats[
+                "quality_rejected"
+            ] += 1
+
+            quality_rejected.append({
+                "id": x.get("id"),
+                "title": x.get("title"),
+                "source": x.get("source"),
+                "quality_errors": x.get(
+                    "quality_errors",
+                    []
+                ),
+            })
+
+            print(
+                "QUALITY REJECTED:",
+                x.get("title", ""),
+                "|",
+                x.get(
+                    "quality_errors",
+                    []
+                )
+            )
+
+            # IMPORTANT:
+            # No held.append(x)
+            # No q.append(x)
+            # No mark_queued()
+            #
+            # Simply move to the next story.
             continue
 
         # -----------------------------------------------------
-        # Queue
+        # Queue only quality-passed stories.
         # -----------------------------------------------------
+
         q.append(x)
 
         mark_queued(
@@ -507,12 +574,14 @@ def main():
     # ---------------------------------------------------------
     # Commit database changes
     # ---------------------------------------------------------
+
     c.commit()
     c.close()
 
     # ---------------------------------------------------------
     # Sort queue by priority
     # ---------------------------------------------------------
+
     q.sort(
         key=lambda x: (
             x.get(
@@ -534,13 +603,18 @@ def main():
     # ---------------------------------------------------------
     # Apply maximum stories per run
     # ---------------------------------------------------------
+
     q = q[
         :CONFIG["max_stories_per_run"]
     ]
 
     # ---------------------------------------------------------
     # Write queue
+    #
+    # IMPORTANT:
+    # quality-rejected stories are NOT written to "held".
     # ---------------------------------------------------------
+
     QUEUE.parent.mkdir(
         parents=True,
         exist_ok=True
@@ -552,8 +626,12 @@ def main():
                 "generated_at": now,
                 "count": len(q),
                 "held_count": len(held),
+                "quality_rejected_count": len(
+                    quality_rejected
+                ),
                 "stories": q,
                 "held": held[:30],
+                "quality_rejected": quality_rejected[:30],
             },
             indent=2,
             ensure_ascii=False,
@@ -563,6 +641,7 @@ def main():
     # ---------------------------------------------------------
     # Print queued stories
     # ---------------------------------------------------------
+
     for x in q:
         print(
             f"[{x['priority_level']} | "
@@ -576,6 +655,7 @@ def main():
     # ---------------------------------------------------------
     # Basic run results
     # ---------------------------------------------------------
+
     print(
         "Collected recent stories:",
         len(items)
@@ -591,9 +671,15 @@ def main():
         len(held)
     )
 
+    print(
+        "Quality rejected:",
+        len(quality_rejected)
+    )
+
     # ---------------------------------------------------------
     # Per-run diagnostics
     # ---------------------------------------------------------
+
     print("\nRUN STATS")
 
     print(
@@ -605,8 +691,36 @@ def main():
     )
 
     # ---------------------------------------------------------
+    # Quality rejection diagnostics
+    # ---------------------------------------------------------
+
+    if quality_rejected:
+
+        print(
+            "\nQUALITY REJECTED STORIES"
+        )
+
+        for story in quality_rejected:
+
+            print(
+                f"[{story.get('source', '')}] "
+                f"{story.get('title', '')}"
+            )
+
+            print(
+                "  Errors:",
+                ", ".join(
+                    story.get(
+                        "quality_errors",
+                        []
+                    )
+                )
+            )
+
+    # ---------------------------------------------------------
     # Below-score diagnostics
     # ---------------------------------------------------------
+
     if below_score_stories:
 
         print(
