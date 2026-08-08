@@ -1,13 +1,13 @@
 name: World News Bot — Fast Collector
 
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
   schedule:
     # GitHub's shortest supported schedule interval is 5 minutes.
     - cron: "*/5 * * * *"
-
-permissions:
-  contents: write
 
 concurrency:
   group: world-news-state
@@ -29,12 +29,14 @@ jobs:
         run: |
           set -e
           mkdir -p data
+
           if git ls-remote --exit-code --heads origin state >/dev/null 2>&1; then
             git fetch origin state
             git show origin/state:data/news.db > data/news.db || true
           fi
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -71,7 +73,8 @@ jobs:
       - name: Human review report
         run: python -m src.review
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload news output
+        uses: actions/upload-artifact@v4
         with:
           name: news-output
           path: |
@@ -85,8 +88,10 @@ jobs:
         shell: bash
         run: |
           set -e
+
           git config user.name "world-news-bot"
           git config user.email "world-news-bot@users.noreply.github.com"
+
           git fetch origin state || true
 
           if git show-ref --verify --quiet refs/remotes/origin/state; then
@@ -95,18 +100,24 @@ jobs:
             mkdir -p /tmp/news-state
             git -C /tmp/news-state init
             git -C /tmp/news-state checkout --orphan state
-            git -C /tmp/news-state remote add origin "${{ github.server_url }}/${{ github.repository }}.git"
+            git -C /tmp/news-state remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
           fi
+
+          git -C /tmp/news-state remote set-url origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
 
           git -C /tmp/news-state config user.name "world-news-bot"
           git -C /tmp/news-state config user.email "world-news-bot@users.noreply.github.com"
 
           mkdir -p /tmp/news-state/data
           cp data/news.db /tmp/news-state/data/news.db
+
           cd /tmp/news-state
+
           git add data/news.db
+
           if git diff --cached --quiet; then
             exit 0
           fi
+
           git commit -m "Update news event memory"
           git push origin HEAD:state
